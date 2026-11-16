@@ -2,25 +2,23 @@
  * code-server embedding UI.
  *
  * Slots:
- * - `CodeServerEntityButton` (toolbarButton on issue + project) → the entry
- *   point that is actually visible in the chat-shell task page: one compact
- *   "Code" button opens a full-screen editor overlay for this entity's own
- *   workspace. No path bar, no address bar until you click.
- * - `CodeServerContextTab` (detailTab on issue + project) → same editor as an
- *   inline tab for the classic task interface.
- * - `CodeServerPage` (page) → full height editor + folder picker.
- * - `CodeServerToolbarButton` (globalToolbarButton) → top-bar button to the page.
+ * - `CodeServerToolbarButton` (globalToolbarButton) → the single top-bar
+ *   "Code" entry. It resolves the task/project the current page is showing and
+ *   opens that entity's own workspace full-screen. Renders nothing on pages
+ *   that are not a task or a project.
+ * - `CodeServerContextTab` (detailTab on issue) → the same editor as a
+ *   borderless, chrome-free side-panel tab: only the editor, filling the tab.
+ * - `CodeServerPage` (page) → full-bleed editor for direct plugin-route access.
  *
  * Build constraints: this module is imported by the Paperclip UI as a same-origin
  * ES module. Only `react`, `react-dom`, `react/jsx-runtime` and
  * `@paperclipai/plugin-sdk/ui` may stay as bare imports (the host rewrites them).
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useHostContext, usePluginData } from "@paperclipai/plugin-sdk/ui";
 import { buildCodeServerUrl, deriveCodeServerBase } from "../shared/urls.js";
-import { describeSource, type TargetSource } from "../shared/workspace.js";
 
 type SlotContext = {
   companyId?: string | null;
@@ -34,188 +32,56 @@ type SlotProps = {
 
 type WorkspaceResult = {
   path: string;
-  source: TargetSource;
+  source: "issue_workspace" | "project_workspace";
   name: string | null;
   entityType: "issue" | "project";
 };
 
-const BASE_URL_KEY = "paperclip.codeserver.baseUrl";
-const FOLDER_KEY = "paperclip.codeserver.folder";
+type EntityType = WorkspaceResult["entityType"];
 
-const DEFAULT_FOLDERS = [
-  "/home/linuxbrew/Projects/qnnp-opc",
-  "/home/linuxbrew/Projects",
-  "/home/linuxbrew",
-];
+/** Direct plugin-route access has no entity; show the projects root. */
+const PAGE_FOLDER = "/home/linuxbrew/Projects";
 
-/** Per-entity manual override; auto-resolution wins until the user edits. */
-function overrideKey(entityType: string | null, entityId: string | null): string | null {
-  if (!entityType || !entityId) return null;
-  return `paperclip.codeserver.folder.${entityType}.${entityId}`;
-}
+/** The editor is theme-neutral: `Canvas` follows the host's light/dark scheme. */
+const FRAME_STYLE = {
+  width: "100%",
+  height: "100%",
+  border: "none",
+  display: "block",
+  background: "Canvas",
+} as const;
 
-function readStored(key: string): string | null {
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
+const STATUS_STYLE = {
+  padding: "12px",
+  fontSize: "12px",
+  lineHeight: 1.6,
+  color: "inherit",
+  background: "Canvas",
+} as const;
 
-function writeStored(key: string, value: string): void {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    /* storage may be unavailable; the in-memory state still works */
-  }
-}
+const ENTRY_BUTTON_STYLE = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "6px",
+  font: "inherit",
+  fontSize: "12px",
+  padding: "4px 10px",
+  borderRadius: "6px",
+  border: "1px solid color-mix(in srgb, currentColor 18%, transparent)",
+  background: "transparent",
+  color: "inherit",
+  cursor: "pointer",
+} as const;
 
-function clearStored(key: string): void {
-  try {
-    window.localStorage.removeItem(key);
-  } catch {
-    /* storage may be unavailable; the in-memory state still works */
-  }
-}
-
-const border = "1px solid color-mix(in srgb, currentColor 18%, transparent)";
-
-const styles = {
-  page: {
-    display: "flex",
-    flexDirection: "column" as const,
-    height: "calc(100vh - 7.5rem)",
-    minHeight: "420px",
-    gap: "8px",
-  },
-  tab: {
-    display: "flex",
-    flexDirection: "column" as const,
-    height: "calc(100vh - 16rem)",
-    minHeight: "460px",
-    gap: "8px",
-  },
-  bar: {
-    display: "flex",
-    flexWrap: "wrap" as const,
-    alignItems: "center",
-    gap: "8px",
-    fontSize: "12px",
-  },
-  label: { opacity: 0.65 },
-  path: {
-    fontFamily:
-      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace",
-    fontSize: "12px",
-    wordBreak: "break-all" as const,
-  },
-  chip: {
-    fontSize: "11px",
-    padding: "2px 6px",
-    borderRadius: "999px",
-    border,
-    opacity: 0.75,
-  },
-  input: {
-    font: "inherit",
-    fontSize: "12px",
-    padding: "6px 8px",
-    borderRadius: "6px",
-    border,
-    background: "transparent",
-    color: "inherit",
-    minWidth: "0",
-  },
-  button: {
-    font: "inherit",
-    fontSize: "12px",
-    padding: "6px 10px",
-    borderRadius: "6px",
-    border,
-    background: "transparent",
-    color: "inherit",
-    cursor: "pointer",
-  },
-  entryButton: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "6px",
-    font: "inherit",
-    fontSize: "12px",
-    padding: "4px 10px",
-    borderRadius: "6px",
-    border,
-    background: "transparent",
-    color: "inherit",
-    cursor: "pointer",
-  },
-  link: { fontSize: "12px", textDecoration: "underline" },
-  frameWrap: {
-    flex: "1 1 auto",
-    minHeight: "0",
-    border,
-    borderRadius: "8px",
-    overflow: "hidden",
-    background: "#1e1e1e",
-  },
-  frame: { width: "100%", height: "100%", border: "none", display: "block" },
-  notice: {
-    fontSize: "12px",
-    padding: "10px 12px",
-    borderRadius: "8px",
-    border,
-    lineHeight: 1.6,
-  },
-  settings: { fontSize: "12px" },
-  settingsBody: {
-    display: "flex",
-    flexWrap: "wrap" as const,
-    alignItems: "center",
-    gap: "8px",
-    paddingTop: "6px",
-  },
-  overlay: {
-    position: "fixed" as const,
-    inset: 0,
-    zIndex: 2147483000,
-    display: "flex",
-    flexDirection: "column" as const,
-    background: "#1e1e1e",
-    color: "#e6e6e6",
-  },
-  overlayBar: {
-    display: "flex",
-    flexWrap: "wrap" as const,
-    alignItems: "center",
-    gap: "10px",
-    padding: "8px 12px",
-    fontSize: "12px",
-    background: "#252526",
-    borderBottom: "1px solid #3c3c3c",
-    color: "#cccccc",
-  },
-  overlaySpacer: { flex: "1 1 auto" },
-  overlayButton: {
-    font: "inherit",
-    fontSize: "12px",
-    padding: "4px 10px",
-    borderRadius: "6px",
-    border: "1px solid #3c3c3c",
-    background: "transparent",
-    color: "#cccccc",
-    cursor: "pointer",
-  },
-  overlayFrame: { flex: "1 1 auto", width: "100%", border: "none", display: "block" },
-  overlayNotice: {
-    padding: "24px",
-    fontSize: "13px",
-    lineHeight: 1.7,
-    color: "#cccccc",
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: "12px",
-  },
-};
+const OVERLAY_STYLE = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 2147483000,
+  display: "flex",
+  flexDirection: "column",
+  background: "Canvas",
+  color: "CanvasText",
+} as const;
 
 const TERMINAL_ICON = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -223,15 +89,6 @@ const TERMINAL_ICON = (
     <line x1="12" y1="19" x2="20" y2="19" />
   </svg>
 );
-
-function useCodeServerBase(): [string, (next: string) => void] {
-  const defaultBase = useMemo(() => deriveCodeServerBase(window.location), []);
-  const [baseUrl, setBaseUrl] = useState<string>(() => readStored(BASE_URL_KEY) ?? defaultBase);
-  useEffect(() => {
-    writeStored(BASE_URL_KEY, baseUrl);
-  }, [baseUrl]);
-  return [baseUrl, setBaseUrl];
-}
 
 /**
  * Full-screen overlays escape the page container: the task header can sit in a
@@ -243,257 +100,143 @@ function PortalLayer({ children }: { children: ReactNode }) {
   return createPortal(children, document.body);
 }
 
-function CodeServerFrame({ frameUrl, reloadKey }: { frameUrl: string; reloadKey: number }) {
-  if (!frameUrl) {
-    return (
-      <div style={{ ...styles.notice, border: "none" }}>没有可用的目录。</div>
-    );
+function useCodeServerBase(): string {
+  return useMemo(() => deriveCodeServerBase(window.location), []);
+}
+
+/** Parse `/CMP/issues/CMP-29` and `/CMP/projects/<ref>` into an entity. */
+function routeEntity(pathname: string | undefined): {
+  entityId: string;
+  entityType: EntityType;
+} | null {
+  const segments = (pathname ?? "")
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => {
+      try {
+        return decodeURIComponent(segment);
+      } catch {
+        return segment;
+      }
+    });
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    if (segments[index] === "issues") {
+      return { entityType: "issue", entityId: segments[index + 1]! };
+    }
+    if (segments[index] === "projects") {
+      return { entityType: "project", entityId: segments[index + 1]! };
+    }
   }
+  return null;
+}
+
+function CodeFrame({ frameUrl, title }: { frameUrl: string; title: string }) {
   return (
-    <div style={styles.frameWrap}>
-      <iframe
-        key={reloadKey}
-        src={frameUrl}
-        style={styles.frame}
-        title="code-server"
-        allow="clipboard-read; clipboard-write"
-      />
-    </div>
+    <iframe
+      src={frameUrl}
+      style={FRAME_STYLE}
+      title={title}
+      allow="clipboard-read; clipboard-write"
+    />
   );
 }
 
-/** Collapsed server-address field; hidden until someone actually needs it. */
-function BaseUrlSettings({
-  baseUrl,
-  defaultBase,
-  onChange,
-  onReset,
+/** Resolve the current page's entity, preferring the route over host context. */
+function useActiveEntity(): {
+  entityId: string;
+  entityType: EntityType;
+  companyId: string | null;
+} | null {
+  const host = useHostContext();
+  return useMemo(() => {
+    const fromRoute = routeEntity(window.location.pathname);
+    if (fromRoute) return { ...fromRoute, companyId: host.companyId ?? null };
+    if ((host.entityType === "issue" || host.entityType === "project") && host.entityId) {
+      return {
+        entityId: host.entityId,
+        entityType: host.entityType,
+        companyId: host.companyId ?? null,
+      };
+    }
+    return null;
+  }, [host.companyId, host.entityId, host.entityType]);
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * Project pages use a url key (`/CMP/projects/opc`), while the plugin bridge
+ * only accepts a project UUID. Resolve it through the host's own read API
+ * (same-origin session), so the plugin needs no extra project capability.
+ */
+function ProjectRefEntry({
+  projectRef,
+  companyId,
 }: {
-  baseUrl: string;
-  defaultBase: string;
-  onChange: (next: string) => void;
-  onReset: () => void;
+  projectRef: string;
+  companyId: string | null;
 }) {
-  return (
-    <details style={styles.settings}>
-      <summary style={{ cursor: "pointer", opacity: 0.6 }}>设置</summary>
-      <div style={styles.settingsBody}>
-        <span style={styles.label}>code-server 地址</span>
-        <input
-          style={{ ...styles.input, flex: "1 1 260px" }}
-          value={baseUrl}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder={defaultBase}
-          spellCheck={false}
-        />
-        {baseUrl !== defaultBase ? (
-          <button type="button" style={styles.button} onClick={onReset}>恢复默认</button>
-        ) : null}
-      </div>
-    </details>
-  );
-}
-
-export function CodeServerPage({ context }: SlotProps) {
-  const [baseUrl, setBaseUrl] = useCodeServerBase();
-  const defaultBase = useMemo(() => deriveCodeServerBase(window.location), []);
-  const [folder, setFolder] = useState<string>(() => readStored(FOLDER_KEY) ?? DEFAULT_FOLDERS[0]);
-  const [reloadKey, setReloadKey] = useState(0);
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [resolveError, setResolveError] = useState<string | null>(null);
 
   useEffect(() => {
-    writeStored(FOLDER_KEY, folder);
-  }, [folder]);
+    if (!companyId) {
+      setResolveError("缺少公司上下文，无法定位项目");
+      return;
+    }
+    let cancelled = false;
+    const params = new URLSearchParams({ companyId });
+    fetch(`/api/projects/${encodeURIComponent(projectRef)}?${params}`, {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const body = (await response.json()) as { id?: string; project?: { id?: string } };
+        const id = body?.project?.id ?? body?.id;
+        if (!id) throw new Error("响应里没有项目 id");
+        if (!cancelled) setProjectId(id);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setResolveError(error instanceof Error ? error.message : String(error));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, projectRef]);
 
-  const frameUrl = useMemo(() => buildCodeServerUrl(baseUrl, folder), [baseUrl, folder]);
-
+  if (projectId) return <CodeEntryButton entityId={projectId} entityType="project" />;
   return (
-    <div style={styles.page}>
-      <div style={styles.bar}>
-        <input
-          style={{ ...styles.input, flex: "1 1 280px" }}
-          value={folder}
-          onChange={(event) => setFolder(event.target.value)}
-          placeholder={DEFAULT_FOLDERS[0]}
-          spellCheck={false}
-          aria-label="目录"
-        />
-        <button type="button" style={styles.button} onClick={() => setReloadKey((value) => value + 1)}>
-          打开
-        </button>
-        {frameUrl ? (
-          <a style={styles.link} href={frameUrl} target="_blank" rel="noreferrer">新标签</a>
-        ) : null}
-        {context?.companyId ? null : null}
-      </div>
-      <CodeServerFrame frameUrl={frameUrl} reloadKey={reloadKey} />
-      <BaseUrlSettings
-        baseUrl={baseUrl}
-        defaultBase={defaultBase}
-        onChange={setBaseUrl}
-        onReset={() => setBaseUrl(defaultBase)}
-      />
-    </div>
+    <button
+      type="button"
+      style={ENTRY_BUTTON_STYLE}
+      title={resolveError ? `无法定位这个项目：${resolveError}` : "正在定位这个项目…"}
+      disabled
+    >
+      {TERMINAL_ICON}
+      <span>Code</span>
+    </button>
   );
 }
 
-/**
- * Task/project tab (classic interface): the folder comes from the entity's
- * workspace, resolved by the worker.
- */
-export function CodeServerContextTab() {
-  const host = useHostContext();
-  const entityId = host.entityId ?? null;
-  const entityType = host.entityType ?? null;
-  const entityKey = overrideKey(entityType, entityId);
-  const { data, loading, error, refresh } = usePluginData<WorkspaceResult>("workspace", {
-    entityId,
-    entityType,
-  });
-
-  const [baseUrl, setBaseUrl] = useCodeServerBase();
-  const defaultBase = useMemo(() => deriveCodeServerBase(window.location), []);
-  const [customFolder, setCustomFolder] = useState<string | null>(() => {
-    const stored = entityKey ? readStored(entityKey) : null;
-    return stored && stored.trim() ? stored : null;
-  });
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [reloadKey, setReloadKey] = useState(0);
-
-  const resolvedPath = data?.path ?? "";
-  const folder = (customFolder ?? resolvedPath).trim();
-  const frameUrl = useMemo(
-    () => (folder ? buildCodeServerUrl(baseUrl, folder) : ""),
-    [baseUrl, folder],
-  );
-
-  const applyDraft = useCallback(() => {
-    const next = draft.trim();
-    if (!next) return;
-    setCustomFolder(next);
-    if (entityKey) writeStored(entityKey, next);
-    setEditing(false);
-    setReloadKey((value) => value + 1);
-  }, [draft, entityKey]);
-
-  const resetToResolved = useCallback(() => {
-    setCustomFolder(null);
-    if (entityKey) clearStored(entityKey);
-    setEditing(false);
-    setReloadKey((value) => value + 1);
-  }, [entityKey]);
-
-  const errorMessage = error?.message ?? null;
-  const showFrame = !loading && Boolean(frameUrl);
-
-  return (
-    <div style={styles.tab}>
-      <div style={styles.bar}>
-        <span style={styles.path}>{loading ? "解析中…" : folder || "（未解析到目录）"}</span>
-        {data ? <span style={styles.chip}>{describeSource(data.source)}</span> : null}
-        {customFolder ? <span style={styles.chip}>手改</span> : null}
-        <button type="button" style={styles.button} onClick={() => setReloadKey((value) => value + 1)}>
-          重新加载
-        </button>
-        <button
-          type="button"
-          style={styles.button}
-          onClick={() => {
-            setDraft(folder);
-            setEditing((value) => !value);
-          }}
-        >
-          {editing ? "收起" : "改目录"}
-        </button>
-        {customFolder ? (
-          <button type="button" style={styles.button} onClick={resetToResolved}>恢复工作区目录</button>
-        ) : null}
-        {frameUrl ? (
-          <a style={styles.link} href={frameUrl} target="_blank" rel="noreferrer">新标签</a>
-        ) : null}
-      </div>
-
-      {editing ? (
-        <div style={styles.bar}>
-          <input
-            style={{ ...styles.input, flex: "1 1 320px" }}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") applyDraft();
-            }}
-            placeholder={DEFAULT_FOLDERS[0]}
-            spellCheck={false}
-            autoFocus
-          />
-          <button type="button" style={styles.button} onClick={applyDraft}>应用</button>
-        </div>
-      ) : null}
-
-      {loading ? <div style={styles.notice}>正在解析这个{entityType === "project" ? "项目" : "任务"}的工作区目录…</div> : null}
-
-      {!loading && (errorMessage || !folder) ? (
-        <div style={styles.notice}>
-          <div>
-            {errorMessage
-              ? `解析工作区失败：${errorMessage}`
-              : `这个${entityType === "project" ? "项目" : "任务"}没有可用的工作区目录。`}
-          </div>
-          <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <input
-              style={{ ...styles.input, flex: "1 1 320px" }}
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") applyDraft();
-              }}
-              placeholder="手动填一个绝对路径，例如 /home/linuxbrew/Projects/qnnp-opc"
-              spellCheck={false}
-            />
-            <button type="button" style={styles.button} onClick={applyDraft}>用这个目录</button>
-            <button type="button" style={styles.button} onClick={() => refresh()}>重试</button>
-          </div>
-        </div>
-      ) : null}
-
-      {showFrame ? <CodeServerFrame frameUrl={frameUrl} reloadKey={reloadKey} /> : null}
-
-      <BaseUrlSettings
-        baseUrl={baseUrl}
-        defaultBase={defaultBase}
-        onChange={setBaseUrl}
-        onReset={() => setBaseUrl(defaultBase)}
-      />
-    </div>
-  );
-}
-
-/**
- * Task/project toolbar entry (visible in the default chat-shell UI, where the
- * detail tab strip is hidden). One click opens the entity's workspace in a
- * full-screen editor; the page itself stays untouched until then.
- */
-export function CodeServerEntityButton() {
-  const host = useHostContext();
-  const entityId = host.entityId ?? null;
-  const entityType = host.entityType ?? null;
-  const entityKey = overrideKey(entityType, entityId);
+/** Full-screen editor for one entity, opened from the top-bar button. */
+function CodeEntryButton({
+  entityId,
+  entityType,
+}: {
+  entityId: string;
+  entityType: EntityType;
+}) {
   const { data, loading, error } = usePluginData<WorkspaceResult>("workspace", {
     entityId,
     entityType,
   });
-
-  const [baseUrl] = useCodeServerBase();
+  const baseUrl = useCodeServerBase();
   const [open, setOpen] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
-  const [draft, setDraft] = useState("");
-  const [customFolder, setCustomFolder] = useState<string | null>(() => {
-    const stored = entityKey ? readStored(entityKey) : null;
-    return stored && stored.trim() ? stored : null;
-  });
 
-  const resolvedPath = data?.path ?? "";
-  const folder = (customFolder ?? resolvedPath).trim();
+  const folder = data?.path ?? "";
   const frameUrl = useMemo(
     () => (folder ? buildCodeServerUrl(baseUrl, folder) : ""),
     [baseUrl, folder],
@@ -508,99 +251,100 @@ export function CodeServerEntityButton() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open]);
 
-  const applyDraft = useCallback(() => {
-    const next = draft.trim();
-    if (!next) return;
-    setCustomFolder(next);
-    if (entityKey) writeStored(entityKey, next);
-    setReloadKey((value) => value + 1);
-  }, [draft, entityKey]);
-
   const title = loading
     ? "正在解析工作区目录"
     : folder
-    ? `在 Paperclip 里打开 ${folder}`
-    : "没有解析到工作区目录，点击手动指定";
+      ? `在 Paperclip 里打开 ${folder}`
+      : "没有解析到工作区目录";
 
   return (
     <>
-      <button type="button" style={styles.entryButton} title={title} onClick={() => setOpen((value) => !value)}>
+      <button
+        type="button"
+        style={ENTRY_BUTTON_STYLE}
+        title={title}
+        onClick={() => setOpen(true)}
+      >
         {TERMINAL_ICON}
         <span>Code</span>
       </button>
       {open ? (
         <PortalLayer>
-        <div style={styles.overlay} role="dialog" aria-label="code-server">
-          <div style={styles.overlayBar}>
-            <span style={styles.path}>{loading ? "解析中…" : folder || "（未解析到目录）"}</span>
-            {data ? <span style={styles.chip}>{describeSource(data.source)}</span> : null}
-            {customFolder ? <span style={styles.chip}>手改</span> : null}
-            <span style={styles.overlaySpacer} />
+          <div style={OVERLAY_STYLE} role="dialog" aria-label="code-server">
             {frameUrl ? (
-              <button
-                type="button"
-                style={styles.overlayButton}
-                onClick={() => setReloadKey((value) => value + 1)}
-              >
-                重新加载
-              </button>
-            ) : null}
-            {frameUrl ? (
-              <a style={{ ...styles.link, color: "#cccccc" }} href={frameUrl} target="_blank" rel="noreferrer">新标签</a>
-            ) : null}
-            <button type="button" style={styles.overlayButton} onClick={() => setOpen(false)}>关闭</button>
-          </div>
-          {frameUrl ? (
-            <iframe
-              key={reloadKey}
-              src={frameUrl}
-              style={styles.overlayFrame}
-              title="code-server"
-              allow="clipboard-read; clipboard-write"
-            />
-          ) : (
-            <div style={styles.overlayNotice}>
-              <div>
+              <CodeFrame frameUrl={frameUrl} title="code-server" />
+            ) : (
+              <div style={STATUS_STYLE}>
                 {loading
-                  ? `正在解析这个${entityType === "project" ? "项目" : "任务"}的工作区目录…`
-                  : error?.message
-                  ? `解析工作区失败：${error.message}`
-                  : `这个${entityType === "project" ? "项目" : "任务"}没有可用的工作区目录。`}
+                  ? "正在解析这个页面的工作区目录…"
+                  : error?.message ?? "这个页面没有可用的工作区目录。"}
               </div>
-              {loading ? null : (
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <input
-                    style={{ ...styles.input, flex: "1 1 320px", color: "#e6e6e6", borderColor: "#3c3c3c" }}
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") applyDraft();
-                    }}
-                    placeholder="手动填一个绝对路径，例如 /home/linuxbrew/Projects/qnnp-opc"
-                    spellCheck={false}
-                  />
-                  <button type="button" style={styles.overlayButton} onClick={applyDraft}>用这个目录</button>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+            )}
+          </div>
         </PortalLayer>
       ) : null}
     </>
   );
 }
 
-export function CodeServerToolbarButton({ slot, context }: SlotProps) {
-  const prefix = context?.companyPrefix ?? "";
-  const pluginId = slot?.pluginId ?? "qnnp.codeserver";
-  const href = prefix ? `/${prefix}/plugins/${encodeURIComponent(pluginId)}` : `/plugins/${encodeURIComponent(pluginId)}`;
+/**
+ * Top-bar entry. One "Code" button, scoped to the task/project of the page
+ * currently on screen; hidden everywhere else.
+ */
+export function CodeServerToolbarButton(_props: SlotProps) {
+  const entity = useActiveEntity();
+  if (!entity) return null;
+  if (entity.entityType === "project" && !UUID_RE.test(entity.entityId)) {
+    return <ProjectRefEntry projectRef={entity.entityId} companyId={entity.companyId} />;
+  }
+  return <CodeEntryButton entityId={entity.entityId} entityType={entity.entityType} />;
+}
+
+/**
+ * Side-panel tab on a task: chrome-free. The workspace is resolved by the
+ * worker; the editor fills the tab. No folder picker, no reload controls.
+ */
+export function CodeServerContextTab(_props: SlotProps) {
+  const host = useHostContext();
+  const entityId = host.entityId ?? null;
+  const entityType = (host.entityType === "issue" || host.entityType === "project")
+    ? host.entityType
+    : null;
+  const { data, loading, error } = usePluginData<WorkspaceResult>("workspace", {
+    entityId,
+    entityType,
+  });
+  const baseUrl = useCodeServerBase();
+
+  const folder = data?.path ?? "";
+  const frameUrl = useMemo(
+    () => (folder ? buildCodeServerUrl(baseUrl, folder) : ""),
+    [baseUrl, folder],
+  );
+
+  if (frameUrl) return <CodeFrame frameUrl={frameUrl} title="code-server" />;
   return (
-    <a style={styles.entryButton} href={href} title="在 Paperclip 里打开 code-server">
-      {TERMINAL_ICON}
-      <span>Code</span>
-    </a>
+    <div style={STATUS_STYLE}>
+      {loading
+        ? "正在解析这个任务的工作区目录…"
+        : error?.message ?? "这个任务没有可用的工作区目录。"}
+    </div>
   );
 }
 
-export default CodeServerPage;
+/**
+ * Direct plugin route (`/:companyPrefix/plugins/:pluginId`): full-bleed editor,
+ * no page chrome or navigation controls.
+ */
+export function CodeServerPage(_props: SlotProps) {
+  const baseUrl = useCodeServerBase();
+  const frameUrl = useMemo(
+    () => buildCodeServerUrl(baseUrl, PAGE_FOLDER),
+    [baseUrl],
+  );
+  return (
+    <div style={{ height: "calc(100vh - 8rem)", minHeight: "400px" }}>
+      <CodeFrame frameUrl={frameUrl} title="code-server" />
+    </div>
+  );
+}

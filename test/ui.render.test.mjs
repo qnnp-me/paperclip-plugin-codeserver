@@ -63,37 +63,45 @@ const ui = await import("../dist/ui/index.js");
 const context = { companyId: "company-1", companyPrefix: "CMP" };
 const slot = { pluginId: "qnnp.codeserver", displayName: "Code Server" };
 
-test("CodeServerPage renders an iframe pointed at the sibling code-server host", () => {
+test("CodeServerPage renders a chrome-free full-bleed editor", () => {
   const html = renderToStaticMarkup(createElement(ui.CodeServerPage, { slot, context }));
   assert.match(html, /<iframe/);
   assert.match(
     html,
-    /src="https:\/\/paperclip-19081\.example\.com:18443\/\?folder=%2Fhome%2Flinuxbrew%2FProjects%2Fqnnp-opc"/,
+    /src="https:\/\/paperclip-19081\.example\.com:18443\/\?folder=%2Fhome%2Flinuxbrew%2FProjects"/,
   );
+  assert.doesNotMatch(html, /设置/);
 });
 
-test("CodeServerToolbarButton links to the company-scoped plugin page", () => {
+test("CodeServerToolbarButton is the single top-bar entry for the current entity", () => {
   const html = renderToStaticMarkup(createElement(ui.CodeServerToolbarButton, { slot, context }));
-  assert.match(html, /href="\/CMP\/plugins\/qnnp\.codeserver"/);
-  assert.match(html, />Code</);
-});
-
-test("CodeServerEntityButton is the visible task entry and stays compact until clicked", () => {
-  const html = renderToStaticMarkup(createElement(ui.CodeServerEntityButton, { slot, context }));
   assert.match(html, /<button/);
   assert.match(html, />Code</);
   assert.doesNotMatch(html, /<iframe/);
   assert.match(html, /title="在 Paperclip 里打开 \/home\/linuxbrew\/Projects\/qnnp-opc"/);
 });
 
-test("CodeServerContextTab opens the workspace resolved for the task", () => {
+test("CodeServerToolbarButton renders nothing outside a task or project page", () => {
+  const saved = hostContext;
+  hostContext = { ...saved, entityId: null, entityType: null };
+  try {
+    const html = renderToStaticMarkup(createElement(ui.CodeServerToolbarButton, { slot, context }));
+    assert.equal(html, "");
+  } finally {
+    hostContext = saved;
+  }
+});
+
+test("CodeServerContextTab is only the editor, filling the tab", () => {
   const html = renderToStaticMarkup(createElement(ui.CodeServerContextTab, { slot, context }));
   assert.match(
     html,
     /src="https:\/\/paperclip-19081\.example\.com:18443\/\?folder=%2Fhome%2Flinuxbrew%2FProjects%2Fqnnp-opc"/,
   );
-  assert.match(html, /任务工作区/);
-  assert.match(html, /qnnp-opc/);
+  assert.doesNotMatch(html, /重新加载/);
+  assert.doesNotMatch(html, /改目录/);
+  assert.doesNotMatch(html, /任务工作区/);
+  assert.match(html, /height:100%/);
 });
 
 test("CodeServerContextTab surfaces resolution errors instead of guessing a folder", () => {
@@ -102,7 +110,7 @@ test("CodeServerContextTab surfaces resolution errors instead of guessing a fold
     const html = renderToStaticMarkup(createElement(ui.CodeServerContextTab, { slot, context }));
     assert.doesNotMatch(html, /<iframe/);
     assert.match(html, /这个任务还没有可用的工作区目录/);
-    assert.match(html, /用这个目录/);
+    assert.doesNotMatch(html, /用这个目录/);
   } finally {
     dataResult = {
       data: {
@@ -115,27 +123,5 @@ test("CodeServerContextTab surfaces resolution errors instead of guessing a fold
       error: null,
       refresh() {},
     };
-  }
-});
-
-test("CodeServerContextTab uses the project primary workspace on project pages", () => {
-  hostContext = { ...hostContext, entityId: "project-1", entityType: "project" };
-  dataResult = {
-    data: {
-      path: "/home/linuxbrew/Projects/qnnp-opc",
-      source: "project_workspace",
-      name: "qnnp-opc",
-      entityType: "project",
-    },
-    loading: false,
-    error: null,
-    refresh() {},
-  };
-  try {
-    const html = renderToStaticMarkup(createElement(ui.CodeServerContextTab, { slot, context }));
-    assert.match(html, /项目主工作区/);
-    assert.match(html, /folder=%2Fhome%2Flinuxbrew%2FProjects%2Fqnnp-opc/);
-  } finally {
-    hostContext = { ...hostContext, entityId: "issue-1", entityType: "issue" };
   }
 });
