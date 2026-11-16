@@ -175,3 +175,21 @@ test("while plugin settings are loading, no iframe is mounted with a guessed URL
     settingsResult = { data: null, loading: false, error: null, refresh() {} };
   }
 });
+
+test("the overlay puts the close button in a reserved strip, not over the editor", () => {
+  const html = renderToStaticMarkup(
+    createElement(
+      ui.EditorOverlayChrome,
+      { onClose() {} },
+      createElement("iframe", { src: "about:blank", title: "code-server" }),
+    ),
+  );
+  // The bar is a layout sibling above the iframe body, so no host control can
+  // cover code-server's title bar / status bar buttons.
+  assert.match(html, /<span style="opacity:0.55[^"]*">Code<\/span>/);
+  assert.match(html, /aria-label="关闭编辑器"/);
+  assert.match(html, /关闭<\/span><span aria-hidden="true">×<\/span>/);
+  assert.match(html, /height:30px/);
+  assert.match(html, /flex:1 1 auto/);
+  assert.doesNotMatch(html, /position:absolute/);
+});

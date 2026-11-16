@@ -1,6 +1,6 @@
 {
   "name": "@qnnp/paperclip-plugin-codeserver",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "private": true,
   "type": "module",
   "description": "Embed code-server (VS Code Web) inside Paperclip: a Code entry per task/project workspace, a side-panel tab, and a configurable cs-gate autologin ticket.",

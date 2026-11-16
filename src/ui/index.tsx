@@ -143,29 +143,55 @@ const OVERLAY_STYLE = {
 
 /**
  * The overlay is an iframe the host cannot draw over, so the way out has to be
- * visible: one small floating button, top-right, plus Esc and the browser Back
- * button (see `createOverlayHistory`).
+ * visible. It must not sit on top of the editor: code-server's title bar and
+ * status bar are full of controls, and a floating button covers them. Instead
+ * the host reserves a 30px strip above the iframe and puts the button there,
+ * so the editor never loses a clickable area. Esc and browser Back work too
+ * (see `createOverlayHistory`).
  */
+const OVERLAY_BAR_STYLE = {
+  flex: "0 0 auto",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "8px",
+  height: "30px",
+  padding: "0 4px 0 10px",
+  background: "Canvas",
+  color: "CanvasText",
+  borderBottom: "1px solid color-mix(in srgb, CanvasText 12%, transparent)",
+  fontSize: "11px",
+  lineHeight: 1,
+} as const;
+
+const OVERLAY_LABEL_STYLE = {
+  opacity: 0.55,
+  letterSpacing: "0.06em",
+  textTransform: "uppercase",
+} as const;
+
 const CLOSE_BUTTON_STYLE = {
-  position: "absolute",
-  top: "6px",
-  right: "6px",
-  zIndex: 2,
-  width: "26px",
-  height: "26px",
   display: "inline-flex",
   alignItems: "center",
-  justifyContent: "center",
-  padding: 0,
+  gap: "4px",
+  height: "22px",
+  padding: "0 8px",
   font: "inherit",
-  fontSize: "15px",
+  fontSize: "11px",
   lineHeight: 1,
-  borderRadius: "6px",
-  border: "1px solid color-mix(in srgb, CanvasText 22%, transparent)",
-  background: "color-mix(in srgb, Canvas 90%, transparent)",
+  borderRadius: "5px",
+  border: "1px solid color-mix(in srgb, CanvasText 18%, transparent)",
+  background: "transparent",
   color: "CanvasText",
   cursor: "pointer",
-  boxShadow: "0 1px 4px color-mix(in srgb, CanvasText 18%, transparent)",
+} as const;
+
+/** The iframe fills everything below the bar; the loader covers it. */
+const OVERLAY_BODY_STYLE = {
+  flex: "1 1 auto",
+  minHeight: 0,
+  position: "relative",
+  background: "Canvas",
 } as const;
 
 const TERMINAL_ICON = (
@@ -447,16 +473,7 @@ function CodeEntryButton({
       </button>
       {open ? (
         <PortalLayer>
-          <div style={OVERLAY_STYLE} role="dialog" aria-label="code-server">
-            <button
-              type="button"
-              style={CLOSE_BUTTON_STYLE}
-              title="关闭编辑器（Esc）"
-              aria-label="关闭编辑器"
-              onClick={closeEditor}
-            >
-              ×
-            </button>
+          <EditorOverlayChrome onClose={closeEditor}>
             {settingsLoading ? (
               <div style={STATUS_STYLE}>正在读取插件配置…</div>
             ) : frameUrl ? (
@@ -468,10 +485,42 @@ function CodeEntryButton({
                   : error?.message ?? "这个页面没有可用的工作区目录。"}
               </div>
             )}
-          </div>
+          </EditorOverlayChrome>
         </PortalLayer>
       ) : null}
     </>
+  );
+}
+
+/**
+ * Host chrome around the editor. The bar is part of the layout, not an overlay:
+ * the iframe starts below it, so the close button can never cover a control in
+ * code-server's own title bar or status bar.
+ */
+export function EditorOverlayChrome({
+  onClose,
+  children,
+}: {
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div style={OVERLAY_STYLE} role="dialog" aria-label="code-server">
+      <div style={OVERLAY_BAR_STYLE}>
+        <span style={OVERLAY_LABEL_STYLE}>Code</span>
+        <button
+          type="button"
+          style={CLOSE_BUTTON_STYLE}
+          title="关闭编辑器（Esc）"
+          aria-label="关闭编辑器"
+          onClick={onClose}
+        >
+          <span>关闭</span>
+          <span aria-hidden="true">×</span>
+        </button>
+      </div>
+      <div style={OVERLAY_BODY_STYLE}>{children}</div>
+    </div>
   );
 }
 

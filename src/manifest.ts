@@ -22,7 +22,7 @@
 const manifest = {
   id: "qnnp.codeserver",
   apiVersion: 1,
-  version: "0.6.1",
+  version: "0.6.2",
   displayName: "Code Server",
   description:
     "Embeds code-server inside Paperclip: one top-bar Code button that opens the current task/project workspace full-screen, plus a chrome-free Code tab in the task side panel.",
