@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildCodeServerUrl, deriveCodeServerBase } from "../src/shared/urls.ts";
+import { buildCodeServerUrl, deriveCodeServerBase, withGateTicket } from "../src/shared/urls.ts";
 
 test("derives the sibling code-server host from the public Paperclip host", () => {
   assert.equal(
@@ -41,4 +41,14 @@ test("builds a folder deep link and tolerates a trailing slash", () => {
     "https://host:18443/?folder=%2Fhome%2Flinuxbrew%2FProjects%2Fqnnp-opc",
   );
   assert.equal(buildCodeServerUrl("https://host:18443", ""), "https://host:18443/");
+});
+test("withGateTicket appends cs_t before the fragment and keeps folder", () => {
+  const url = "https://paperclip-19081.example.com:18443/?folder=%2Fhome%2Flinuxbrew%2FProjects%2Fqnnp-opc";
+  assert.equal(
+    withGateTicket(url, "v1.1.abc"),
+    `${url}&cs_t=v1.1.abc`,
+  );
+  assert.equal(withGateTicket("https://x/", "v1.1.abc"), "https://x/?cs_t=v1.1.abc");
+  assert.equal(withGateTicket("https://x/#frag", "v1.1.abc"), "https://x/?cs_t=v1.1.abc#frag");
+  assert.equal(withGateTicket(url, null), url);
 });

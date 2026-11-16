@@ -36,3 +36,15 @@ export function buildCodeServerUrl(baseUrl: string, folder: string): string {
   if (!folder) return `${base}/`;
   return `${base}/?folder=${encodeURIComponent(folder)}`;
 }
+
+/**
+ * Append a cs-gate ticket. The proxy trades `cs_t` for a `cs_gate` cookie and
+ * redirects to the clean URL, so the ticket never stays in the address bar.
+ */
+export function withGateTicket(url: string, token: string | null | undefined): string {
+  if (!token) return url;
+  const [head, hash = ""] = url.split("#");
+  const separator = head.includes("?") ? "&" : "?";
+  const gated = `${head}${separator}cs_t=${encodeURIComponent(token)}`;
+  return hash ? `${gated}#${hash}` : gated;
+}

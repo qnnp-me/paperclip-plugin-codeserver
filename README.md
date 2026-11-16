@@ -76,3 +76,9 @@ paperclipai plugin uninstall qnnp.codeserver --api-base https://paperclip-19099.
 - iframe 依赖「同站」前提。换域名、上游加 `frame-src`、code-server 加 `frame-ancestors` 都会让它退化成「新标签打开」。
 - 插件 UI 是 Paperclip 主应用里的同源 ES module，能力项管不住前端，只装自己写的插件。
 - worker 常驻进程会跟着实例起；`onIdleDrain` 返回 `none`，没有定时器/套接字，不阻止 idle sleep。
+
+## 0.5.0 — 自动登录（配合 cs-gate 代理）
+
+- 新增 worker 数据方法 `gate`：用共享秘密签 5 分钟票据（`v1.<exp>.<HMAC>`），UI 拼 `&cs_t=` 到 iframe URL
+- 拿不到秘密文件时返回 `null`，UI 退回纯 `?folder=` 直链（code-server 登录页），不报错
+- 代理与服务端配置见 `/home/linuxbrew/.local/opt/cs-gate/README.md`

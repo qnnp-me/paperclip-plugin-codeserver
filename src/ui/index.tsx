@@ -18,7 +18,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useHostContext, usePluginData } from "@paperclipai/plugin-sdk/ui";
-import { buildCodeServerUrl, deriveCodeServerBase } from "../shared/urls.js";
+import { buildCodeServerUrl, deriveCodeServerBase, withGateTicket } from "../shared/urls.js";
 
 type SlotContext = {
   companyId?: string | null;
@@ -38,6 +38,12 @@ type WorkspaceResult = {
 };
 
 type EntityType = WorkspaceResult["entityType"];
+
+type GateResult = {
+  token: string;
+  exp: number;
+  ttl: number;
+} | null;
 
 /** Direct plugin-route access has no entity; show the projects root. */
 const PAGE_FOLDER = "/home/linuxbrew/Projects";
@@ -102,6 +108,16 @@ function PortalLayer({ children }: { children: ReactNode }) {
 
 function useCodeServerBase(): string {
   return useMemo(() => deriveCodeServerBase(window.location), []);
+}
+
+/**
+ * cs-gate ticket from the worker (5 min). The proxy trades it for a 12h
+ * session cookie, so the editor opens without code-server's login page.
+ * A `null` ticket (secret unreadable) degrades to the plain URL.
+ */
+function useGateTicket(): string | null {
+  const { data } = usePluginData<GateResult>("gate");
+  return data?.token ?? null;
 }
 
 /** Parse `/CMP/issues/CMP-29` and `/CMP/projects/<ref>` into an entity. */
@@ -234,12 +250,13 @@ function CodeEntryButton({
     entityType,
   });
   const baseUrl = useCodeServerBase();
+  const ticket = useGateTicket();
   const [open, setOpen] = useState(false);
 
   const folder = data?.path ?? "";
   const frameUrl = useMemo(
-    () => (folder ? buildCodeServerUrl(baseUrl, folder) : ""),
-    [baseUrl, folder],
+    () => (folder ? withGateTicket(buildCodeServerUrl(baseUrl, folder), ticket) : ""),
+    [baseUrl, folder, ticket],
   );
 
   useEffect(() => {
@@ -315,11 +332,12 @@ export function CodeServerContextTab(_props: SlotProps) {
     entityType,
   });
   const baseUrl = useCodeServerBase();
+  const ticket = useGateTicket();
 
   const folder = data?.path ?? "";
   const frameUrl = useMemo(
-    () => (folder ? buildCodeServerUrl(baseUrl, folder) : ""),
-    [baseUrl, folder],
+    () => (folder ? withGateTicket(buildCodeServerUrl(baseUrl, folder), ticket) : ""),
+    [baseUrl, folder, ticket],
   );
 
   if (frameUrl) return <CodeFrame frameUrl={frameUrl} title="code-server" />;
@@ -338,9 +356,10 @@ export function CodeServerContextTab(_props: SlotProps) {
  */
 export function CodeServerPage(_props: SlotProps) {
   const baseUrl = useCodeServerBase();
+  const ticket = useGateTicket();
   const frameUrl = useMemo(
-    () => buildCodeServerUrl(baseUrl, PAGE_FOLDER),
-    [baseUrl],
+    () => withGateTicket(buildCodeServerUrl(baseUrl, PAGE_FOLDER), ticket),
+    [baseUrl, ticket],
   );
   return (
     <div style={{ height: "calc(100vh - 8rem)", minHeight: "400px" }}>

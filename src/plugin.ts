@@ -6,6 +6,7 @@
  * booting the worker RPC loop.
  */
 import { definePlugin } from "@paperclipai/plugin-sdk";
+import { issueGateTicket } from "./gate.ts";
 import { resolveWorkspace, type WorkspaceRequest } from "./resolve.ts";
 
 export const pluginDefinition = definePlugin({
@@ -20,6 +21,9 @@ export const pluginDefinition = definePlugin({
         params as WorkspaceRequest,
       );
     });
+    // Short-lived ticket for the cs-gate proxy: the browser never sees the
+    // code-server password, the proxy injects the session server-side.
+    ctx.data.register("gate", async () => issueGateTicket());
     ctx.logger.info("qnnp.codeserver worker ready");
   },
   async onHealth() {
