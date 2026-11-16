@@ -78,6 +78,14 @@ test("CodeServerToolbarButton links to the company-scoped plugin page", () => {
   assert.match(html, />Code</);
 });
 
+test("CodeServerEntityButton is the visible task entry and stays compact until clicked", () => {
+  const html = renderToStaticMarkup(createElement(ui.CodeServerEntityButton, { slot, context }));
+  assert.match(html, /<button/);
+  assert.match(html, />Code</);
+  assert.doesNotMatch(html, /<iframe/);
+  assert.match(html, /title="在 Paperclip 里打开 \/home\/linuxbrew\/Projects\/qnnp-opc"/);
+});
+
 test("CodeServerContextTab opens the workspace resolved for the task", () => {
   const html = renderToStaticMarkup(createElement(ui.CodeServerContextTab, { slot, context }));
   assert.match(

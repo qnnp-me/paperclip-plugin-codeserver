@@ -2,18 +2,22 @@
  * code-server embedding UI.
  *
  * Slots:
- * - `CodeServerPage` (page) → full-height iframe into code-server, folder picker.
- * - `CodeServerToolbarButton` (globalToolbarButton) → top-bar button to that page.
- * - `CodeServerContextTab` (detailTab on issue + project) → opens the entity's
- *   own workspace folder automatically; the folder is resolved by the worker
- *   (`workspace` data key), not hardcoded here.
+ * - `CodeServerEntityButton` (toolbarButton on issue + project) → the entry
+ *   point that is actually visible in the chat-shell task page: one compact
+ *   "Code" button opens a full-screen editor overlay for this entity's own
+ *   workspace. No path bar, no address bar until you click.
+ * - `CodeServerContextTab` (detailTab on issue + project) → same editor as an
+ *   inline tab for the classic task interface.
+ * - `CodeServerPage` (page) → full height editor + folder picker.
+ * - `CodeServerToolbarButton` (globalToolbarButton) → top-bar button to the page.
  *
  * Build constraints: this module is imported by the Paperclip UI as a same-origin
  * ES module. Only `react`, `react-dom`, `react/jsx-runtime` and
  * `@paperclipai/plugin-sdk/ui` may stay as bare imports (the host rewrites them).
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useHostContext, usePluginData } from "@paperclipai/plugin-sdk/ui";
 import { buildCodeServerUrl, deriveCodeServerBase } from "../shared/urls.js";
 import { describeSource, type TargetSource } from "../shared/workspace.js";
@@ -38,17 +42,17 @@ type WorkspaceResult = {
 const BASE_URL_KEY = "paperclip.codeserver.baseUrl";
 const FOLDER_KEY = "paperclip.codeserver.folder";
 
-/** Per-entity manual override; auto-resolution wins until the user edits. */
-function overrideKey(entityType: string | null, entityId: string | null): string | null {
-  if (!entityType || !entityId) return null;
-  return `paperclip.codeserver.folder.${entityType}.${entityId}`;
-}
-
 const DEFAULT_FOLDERS = [
   "/home/linuxbrew/Projects/qnnp-opc",
   "/home/linuxbrew/Projects",
   "/home/linuxbrew",
 ];
+
+/** Per-entity manual override; auto-resolution wins until the user edits. */
+function overrideKey(entityType: string | null, entityId: string | null): string | null {
+  if (!entityType || !entityId) return null;
+  return `paperclip.codeserver.folder.${entityType}.${entityId}`;
+}
 
 function readStored(key: string): string | null {
   try {
@@ -74,15 +78,17 @@ function clearStored(key: string): void {
   }
 }
 
+const border = "1px solid color-mix(in srgb, currentColor 18%, transparent)";
+
 const styles = {
-  root: {
+  page: {
     display: "flex",
     flexDirection: "column" as const,
     height: "calc(100vh - 7.5rem)",
     minHeight: "420px",
     gap: "8px",
   },
-  tabRoot: {
+  tab: {
     display: "flex",
     flexDirection: "column" as const,
     height: "calc(100vh - 16rem)",
@@ -96,7 +102,7 @@ const styles = {
     gap: "8px",
     fontSize: "12px",
   },
-  label: { opacity: 0.7 },
+  label: { opacity: 0.65 },
   path: {
     fontFamily:
       "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace",
@@ -107,26 +113,38 @@ const styles = {
     fontSize: "11px",
     padding: "2px 6px",
     borderRadius: "999px",
-    border: "1px solid color-mix(in srgb, currentColor 25%, transparent)",
-    opacity: 0.8,
+    border,
+    opacity: 0.75,
   },
   input: {
     font: "inherit",
     fontSize: "12px",
     padding: "6px 8px",
     borderRadius: "6px",
-    border: "1px solid color-mix(in srgb, currentColor 25%, transparent)",
+    border,
     background: "transparent",
     color: "inherit",
     minWidth: "0",
   },
-  baseInput: { flex: "1 1 260px" },
   button: {
     font: "inherit",
     fontSize: "12px",
     padding: "6px 10px",
     borderRadius: "6px",
-    border: "1px solid color-mix(in srgb, currentColor 25%, transparent)",
+    border,
+    background: "transparent",
+    color: "inherit",
+    cursor: "pointer",
+  },
+  entryButton: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "6px",
+    font: "inherit",
+    fontSize: "12px",
+    padding: "4px 10px",
+    borderRadius: "6px",
+    border,
     background: "transparent",
     color: "inherit",
     cursor: "pointer",
@@ -135,33 +153,67 @@ const styles = {
   frameWrap: {
     flex: "1 1 auto",
     minHeight: "0",
-    border: "1px solid color-mix(in srgb, currentColor 18%, transparent)",
+    border,
     borderRadius: "8px",
     overflow: "hidden",
     background: "#1e1e1e",
   },
   frame: { width: "100%", height: "100%", border: "none", display: "block" },
-  hint: { fontSize: "11px", opacity: 0.65, lineHeight: 1.5 },
   notice: {
     fontSize: "12px",
     padding: "10px 12px",
     borderRadius: "8px",
-    border: "1px solid color-mix(in srgb, currentColor 18%, transparent)",
+    border,
     lineHeight: 1.6,
   },
-  toolbarButton: {
-    display: "inline-flex",
+  settings: { fontSize: "12px" },
+  settingsBody: {
+    display: "flex",
+    flexWrap: "wrap" as const,
     alignItems: "center",
-    gap: "6px",
+    gap: "8px",
+    paddingTop: "6px",
+  },
+  overlay: {
+    position: "fixed" as const,
+    inset: 0,
+    zIndex: 2147483000,
+    display: "flex",
+    flexDirection: "column" as const,
+    background: "#1e1e1e",
+    color: "#e6e6e6",
+  },
+  overlayBar: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    alignItems: "center",
+    gap: "10px",
+    padding: "8px 12px",
+    fontSize: "12px",
+    background: "#252526",
+    borderBottom: "1px solid #3c3c3c",
+    color: "#cccccc",
+  },
+  overlaySpacer: { flex: "1 1 auto" },
+  overlayButton: {
     font: "inherit",
     fontSize: "12px",
     padding: "4px 10px",
     borderRadius: "6px",
-    border: "1px solid color-mix(in srgb, currentColor 22%, transparent)",
+    border: "1px solid #3c3c3c",
     background: "transparent",
-    color: "inherit",
-    textDecoration: "none",
+    color: "#cccccc",
     cursor: "pointer",
+  },
+  overlayFrame: { flex: "1 1 auto", width: "100%", border: "none", display: "block" },
+  overlayNotice: {
+    padding: "24px",
+    fontSize: "13px",
+    lineHeight: 1.7,
+    color: "#cccccc",
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: "12px",
   },
 };
 
@@ -181,29 +233,64 @@ function useCodeServerBase(): [string, (next: string) => void] {
   return [baseUrl, setBaseUrl];
 }
 
-function CodeServerFrame({
-  frameUrl,
-  reloadKey,
-}: {
-  frameUrl: string;
-  reloadKey: number;
-}) {
+/**
+ * Full-screen overlays escape the page container: the task header can sit in a
+ * transformed/scrolled ancestor that would otherwise clip `position: fixed`.
+ * The portal is skipped during static rendering (tests).
+ */
+function PortalLayer({ children }: { children: ReactNode }) {
+  if (typeof document === "undefined" || !document.body) return <>{children}</>;
+  return createPortal(children, document.body);
+}
+
+function CodeServerFrame({ frameUrl, reloadKey }: { frameUrl: string; reloadKey: number }) {
+  if (!frameUrl) {
+    return (
+      <div style={{ ...styles.notice, border: "none" }}>没有可用的目录。</div>
+    );
+  }
   return (
     <div style={styles.frameWrap}>
-      {frameUrl ? (
-        <iframe
-          key={reloadKey}
-          src={frameUrl}
-          style={styles.frame}
-          title="code-server"
-          allow="clipboard-read; clipboard-write"
-        />
-      ) : (
-        <div style={{ ...styles.notice, border: "none", height: "100%" }}>
-          没有可用的目录。
-        </div>
-      )}
+      <iframe
+        key={reloadKey}
+        src={frameUrl}
+        style={styles.frame}
+        title="code-server"
+        allow="clipboard-read; clipboard-write"
+      />
     </div>
+  );
+}
+
+/** Collapsed server-address field; hidden until someone actually needs it. */
+function BaseUrlSettings({
+  baseUrl,
+  defaultBase,
+  onChange,
+  onReset,
+}: {
+  baseUrl: string;
+  defaultBase: string;
+  onChange: (next: string) => void;
+  onReset: () => void;
+}) {
+  return (
+    <details style={styles.settings}>
+      <summary style={{ cursor: "pointer", opacity: 0.6 }}>设置</summary>
+      <div style={styles.settingsBody}>
+        <span style={styles.label}>code-server 地址</span>
+        <input
+          style={{ ...styles.input, flex: "1 1 260px" }}
+          value={baseUrl}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={defaultBase}
+          spellCheck={false}
+        />
+        {baseUrl !== defaultBase ? (
+          <button type="button" style={styles.button} onClick={onReset}>恢复默认</button>
+        ) : null}
+      </div>
+    </details>
   );
 }
 
@@ -218,64 +305,40 @@ export function CodeServerPage({ context }: SlotProps) {
   }, [folder]);
 
   const frameUrl = useMemo(() => buildCodeServerUrl(baseUrl, folder), [baseUrl, folder]);
-  const reload = useCallback(() => setReloadKey((value) => value + 1), []);
 
   return (
-    <div style={styles.root}>
+    <div style={styles.page}>
       <div style={styles.bar}>
-        <span style={styles.label}>目录</span>
         <input
-          style={{ ...styles.input, flex: "1 1 240px" }}
+          style={{ ...styles.input, flex: "1 1 280px" }}
           value={folder}
           onChange={(event) => setFolder(event.target.value)}
-          placeholder="/home/linuxbrew/Projects/qnnp-opc"
+          placeholder={DEFAULT_FOLDERS[0]}
           spellCheck={false}
+          aria-label="目录"
         />
-        <select
-          style={styles.input}
-          value=""
-          onChange={(event) => {
-            if (event.target.value) setFolder(event.target.value);
-          }}
-          title="常用目录"
-        >
-          <option value="">常用目录…</option>
-          {DEFAULT_FOLDERS.map((entry) => (
-            <option key={entry} value={entry}>{entry}</option>
-          ))}
-        </select>
-        <button type="button" style={styles.button} onClick={reload}>重新加载</button>
-        <a style={styles.link} href={frameUrl} target="_blank" rel="noreferrer">新标签打开</a>
-      </div>
-      <div style={styles.bar}>
-        <span style={styles.label}>code-server</span>
-        <input
-          style={{ ...styles.input, ...styles.baseInput }}
-          value={baseUrl}
-          onChange={(event) => setBaseUrl(event.target.value)}
-          placeholder={defaultBase}
-          spellCheck={false}
-        />
-        {baseUrl !== defaultBase ? (
-          <button type="button" style={styles.button} onClick={() => setBaseUrl(defaultBase)}>恢复默认</button>
+        <button type="button" style={styles.button} onClick={() => setReloadKey((value) => value + 1)}>
+          打开
+        </button>
+        {frameUrl ? (
+          <a style={styles.link} href={frameUrl} target="_blank" rel="noreferrer">新标签</a>
         ) : null}
+        {context?.companyId ? null : null}
       </div>
       <CodeServerFrame frameUrl={frameUrl} reloadKey={reloadKey} />
-      <div style={styles.hint}>
-        首次使用会看到 code-server 登录页，密码在容器里：
-        <code> grep '^PASSWORD=' /home/linuxbrew/.startup/code-server.env</code>
-        。登录后 cookie 与 Paperclip 同站共享，后续直接进编辑器。若长时间空白，检查 code-server 是否在跑
-        （<code>supervisorctl -c /home/linuxbrew/.startup/supervisord.conf status code-server</code>）以及反代是否转发 WebSocket。
-        {context?.companyId ? "" : null}
-      </div>
+      <BaseUrlSettings
+        baseUrl={baseUrl}
+        defaultBase={defaultBase}
+        onChange={setBaseUrl}
+        onReset={() => setBaseUrl(defaultBase)}
+      />
     </div>
   );
 }
 
 /**
- * Task/project tab: the folder comes from the entity's workspace, resolved by
- * the worker. Opening this tab on CMP-29 lands in CMP-29's own folder instead
- * of a global default.
+ * Task/project tab (classic interface): the folder comes from the entity's
+ * workspace, resolved by the worker.
  */
 export function CodeServerContextTab() {
   const host = useHostContext();
@@ -324,24 +387,13 @@ export function CodeServerContextTab() {
   const showFrame = !loading && Boolean(frameUrl);
 
   return (
-    <div style={styles.tabRoot}>
+    <div style={styles.tab}>
       <div style={styles.bar}>
-        <span style={styles.label}>目录</span>
         <span style={styles.path}>{loading ? "解析中…" : folder || "（未解析到目录）"}</span>
         {data ? <span style={styles.chip}>{describeSource(data.source)}</span> : null}
         {customFolder ? <span style={styles.chip}>手改</span> : null}
         <button type="button" style={styles.button} onClick={() => setReloadKey((value) => value + 1)}>
           重新加载
-        </button>
-        <button
-          type="button"
-          style={styles.button}
-          onClick={() => {
-            refresh();
-            setReloadKey((value) => value + 1);
-          }}
-        >
-          重新解析
         </button>
         <button
           type="button"
@@ -357,7 +409,7 @@ export function CodeServerContextTab() {
           <button type="button" style={styles.button} onClick={resetToResolved}>恢复工作区目录</button>
         ) : null}
         {frameUrl ? (
-          <a style={styles.link} href={frameUrl} target="_blank" rel="noreferrer">新标签打开</a>
+          <a style={styles.link} href={frameUrl} target="_blank" rel="noreferrer">新标签</a>
         ) : null}
       </div>
 
@@ -370,7 +422,7 @@ export function CodeServerContextTab() {
             onKeyDown={(event) => {
               if (event.key === "Enter") applyDraft();
             }}
-            placeholder="/home/linuxbrew/Projects/qnnp-opc"
+            placeholder={DEFAULT_FOLDERS[0]}
             spellCheck={false}
             autoFocus
           />
@@ -378,23 +430,7 @@ export function CodeServerContextTab() {
         </div>
       ) : null}
 
-      <div style={styles.bar}>
-        <span style={styles.label}>code-server</span>
-        <input
-          style={{ ...styles.input, ...styles.baseInput }}
-          value={baseUrl}
-          onChange={(event) => setBaseUrl(event.target.value)}
-          placeholder={defaultBase}
-          spellCheck={false}
-        />
-        {baseUrl !== defaultBase ? (
-          <button type="button" style={styles.button} onClick={() => setBaseUrl(defaultBase)}>恢复默认</button>
-        ) : null}
-      </div>
-
-      {loading ? (
-        <div style={styles.notice}>正在解析这个{entityType === "project" ? "项目" : "任务"}的工作区目录…</div>
-      ) : null}
+      {loading ? <div style={styles.notice}>正在解析这个{entityType === "project" ? "项目" : "任务"}的工作区目录…</div> : null}
 
       {!loading && (errorMessage || !folder) ? (
         <div style={styles.notice}>
@@ -422,13 +458,136 @@ export function CodeServerContextTab() {
 
       {showFrame ? <CodeServerFrame frameUrl={frameUrl} reloadKey={reloadKey} /> : null}
 
-      {showFrame ? (
-        <div style={styles.hint}>
-          目录随当前{entityType === "project" ? "项目" : "任务"}的工作区变化；首次使用需在 iframe 里登录一次
-          code-server（密码：<code>grep '^PASSWORD=' /home/linuxbrew/.startup/code-server.env</code>）。
-        </div>
-      ) : null}
+      <BaseUrlSettings
+        baseUrl={baseUrl}
+        defaultBase={defaultBase}
+        onChange={setBaseUrl}
+        onReset={() => setBaseUrl(defaultBase)}
+      />
     </div>
+  );
+}
+
+/**
+ * Task/project toolbar entry (visible in the default chat-shell UI, where the
+ * detail tab strip is hidden). One click opens the entity's workspace in a
+ * full-screen editor; the page itself stays untouched until then.
+ */
+export function CodeServerEntityButton() {
+  const host = useHostContext();
+  const entityId = host.entityId ?? null;
+  const entityType = host.entityType ?? null;
+  const entityKey = overrideKey(entityType, entityId);
+  const { data, loading, error } = usePluginData<WorkspaceResult>("workspace", {
+    entityId,
+    entityType,
+  });
+
+  const [baseUrl] = useCodeServerBase();
+  const [open, setOpen] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [draft, setDraft] = useState("");
+  const [customFolder, setCustomFolder] = useState<string | null>(() => {
+    const stored = entityKey ? readStored(entityKey) : null;
+    return stored && stored.trim() ? stored : null;
+  });
+
+  const resolvedPath = data?.path ?? "";
+  const folder = (customFolder ?? resolvedPath).trim();
+  const frameUrl = useMemo(
+    () => (folder ? buildCodeServerUrl(baseUrl, folder) : ""),
+    [baseUrl, folder],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open]);
+
+  const applyDraft = useCallback(() => {
+    const next = draft.trim();
+    if (!next) return;
+    setCustomFolder(next);
+    if (entityKey) writeStored(entityKey, next);
+    setReloadKey((value) => value + 1);
+  }, [draft, entityKey]);
+
+  const title = loading
+    ? "正在解析工作区目录"
+    : folder
+    ? `在 Paperclip 里打开 ${folder}`
+    : "没有解析到工作区目录，点击手动指定";
+
+  return (
+    <>
+      <button type="button" style={styles.entryButton} title={title} onClick={() => setOpen((value) => !value)}>
+        {TERMINAL_ICON}
+        <span>Code</span>
+      </button>
+      {open ? (
+        <PortalLayer>
+        <div style={styles.overlay} role="dialog" aria-label="code-server">
+          <div style={styles.overlayBar}>
+            <span style={styles.path}>{loading ? "解析中…" : folder || "（未解析到目录）"}</span>
+            {data ? <span style={styles.chip}>{describeSource(data.source)}</span> : null}
+            {customFolder ? <span style={styles.chip}>手改</span> : null}
+            <span style={styles.overlaySpacer} />
+            {frameUrl ? (
+              <button
+                type="button"
+                style={styles.overlayButton}
+                onClick={() => setReloadKey((value) => value + 1)}
+              >
+                重新加载
+              </button>
+            ) : null}
+            {frameUrl ? (
+              <a style={{ ...styles.link, color: "#cccccc" }} href={frameUrl} target="_blank" rel="noreferrer">新标签</a>
+            ) : null}
+            <button type="button" style={styles.overlayButton} onClick={() => setOpen(false)}>关闭</button>
+          </div>
+          {frameUrl ? (
+            <iframe
+              key={reloadKey}
+              src={frameUrl}
+              style={styles.overlayFrame}
+              title="code-server"
+              allow="clipboard-read; clipboard-write"
+            />
+          ) : (
+            <div style={styles.overlayNotice}>
+              <div>
+                {loading
+                  ? `正在解析这个${entityType === "project" ? "项目" : "任务"}的工作区目录…`
+                  : error?.message
+                  ? `解析工作区失败：${error.message}`
+                  : `这个${entityType === "project" ? "项目" : "任务"}没有可用的工作区目录。`}
+              </div>
+              {loading ? null : (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <input
+                    style={{ ...styles.input, flex: "1 1 320px", color: "#e6e6e6", borderColor: "#3c3c3c" }}
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") applyDraft();
+                    }}
+                    placeholder="手动填一个绝对路径，例如 /home/linuxbrew/Projects/qnnp-opc"
+                    spellCheck={false}
+                  />
+                  <button type="button" style={styles.overlayButton} onClick={applyDraft}>用这个目录</button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        </PortalLayer>
+      ) : null}
+    </>
   );
 }
 
@@ -437,7 +596,7 @@ export function CodeServerToolbarButton({ slot, context }: SlotProps) {
   const pluginId = slot?.pluginId ?? "qnnp.codeserver";
   const href = prefix ? `/${prefix}/plugins/${encodeURIComponent(pluginId)}` : `/plugins/${encodeURIComponent(pluginId)}`;
   return (
-    <a style={styles.toolbarButton} href={href} title="在 Paperclip 里打开 code-server">
+    <a style={styles.entryButton} href={href} title="在 Paperclip 里打开 code-server">
       {TERMINAL_ICON}
       <span>Code</span>
     </a>

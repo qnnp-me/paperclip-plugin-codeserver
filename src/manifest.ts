@@ -6,17 +6,19 @@
  * - `entrypoints.worker` is mandatory even for a UI-only plugin.
  * - `page` slots need `ui.page.register`; action buttons need `ui.action.register`;
  *   detail tabs need `ui.detailTab.register`.
- * - `detailTab` slots must list the entity types they mount on.
+ * - `detailTab` and `toolbarButton` slots must list the entity types they
+ *   mount on. The task page hides its tab strip in the default chat-shell UI,
+ *   so the toolbar button is the entry point users actually see.
  * - Workspace lookup (`ctx.projects`, `ctx.executionWorkspaces`) needs the
  *   matching read capabilities; the host audits them per install.
  */
 const manifest = {
   id: "qnnp.codeserver",
   apiVersion: 1,
-  version: "0.2.0",
+  version: "0.3.0",
   displayName: "Code Server",
   description:
-    "Embeds code-server inside Paperclip: a full page, a top-bar entry button, and a Code tab on tasks and projects that opens each entity's own workspace folder.",
+    "Embeds code-server inside Paperclip: a Code button on every task and project that opens that entity's own workspace folder full-screen, plus a full page and a top-bar entry.",
   author: "熊小兮",
   categories: ["workspace"],
   capabilities: [
@@ -48,12 +50,20 @@ const manifest = {
         order: 10,
       },
       {
+        type: "toolbarButton",
+        id: "codeserver-entity-button",
+        displayName: "Code",
+        exportName: "CodeServerEntityButton",
+        entityTypes: ["issue", "project"],
+        order: 20,
+      },
+      {
         type: "detailTab",
         id: "codeserver-detail-tab",
         displayName: "Code",
         exportName: "CodeServerContextTab",
         entityTypes: ["issue", "project"],
-        order: 20,
+        order: 30,
       },
     ],
   },
