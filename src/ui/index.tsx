@@ -18,6 +18,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useHostContext, usePluginData } from "@paperclipai/plugin-sdk/ui";
+import { normalizeSettings, type CodeServerSettings } from "../config.js";
 import { buildCodeServerUrl, deriveCodeServerBase, withGateTicket } from "../shared/urls.js";
 
 type SlotContext = {
@@ -44,9 +45,6 @@ type GateResult = {
   exp: number;
   ttl: number;
 } | null;
-
-/** Direct plugin-route access has no entity; show the projects root. */
-const PAGE_FOLDER = "/home/linuxbrew/Projects";
 
 /** The editor is theme-neutral: `Canvas` follows the host's light/dark scheme. */
 const FRAME_STYLE = {
@@ -159,8 +157,28 @@ function PortalLayer({ children }: { children: ReactNode }) {
   return createPortal(children, document.body);
 }
 
-function useCodeServerBase(): string {
-  return useMemo(() => deriveCodeServerBase(window.location), []);
+/**
+ * Operator configuration comes from the worker (company-scoped settings form).
+ * Deployment values live there, not in this bundle: URL/ports, default folder,
+ * ticket TTL. Until the first response arrives, render from defaults.
+ */
+function useSettings(): { settings: CodeServerSettings; loading: boolean } {
+  const { data, loading } = usePluginData<Record<string, unknown>>("settings", {});
+  const settings = useMemo(() => normalizeSettings(data), [data]);
+  return { settings, loading };
+}
+
+function useCodeServerBase(settings: CodeServerSettings): string {
+  const { codeServerBaseUrl, codeServerPort, paperclipPort } = settings;
+  return useMemo(
+    () =>
+      deriveCodeServerBase(window.location, {
+        baseUrl: codeServerBaseUrl,
+        codeServerPort,
+        paperclipPort,
+      }),
+    [codeServerBaseUrl, codeServerPort, paperclipPort],
+  );
 }
 
 /**
@@ -341,7 +359,8 @@ function CodeEntryButton({
     entityId,
     entityType,
   });
-  const baseUrl = useCodeServerBase();
+  const { settings, loading: settingsLoading } = useSettings();
+  const baseUrl = useCodeServerBase(settings);
   const ticket = useGateTicket();
   const [open, setOpen] = useState(false);
 
@@ -380,7 +399,9 @@ function CodeEntryButton({
       {open ? (
         <PortalLayer>
           <div style={OVERLAY_STYLE} role="dialog" aria-label="code-server">
-            {frameUrl ? (
+            {settingsLoading ? (
+              <div style={STATUS_STYLE}>正在读取插件配置…</div>
+            ) : frameUrl ? (
               <CodeFrame frameUrl={frameUrl} title="code-server" />
             ) : (
               <div style={STATUS_STYLE}>
@@ -423,7 +444,8 @@ export function CodeServerContextTab(_props: SlotProps) {
     entityId,
     entityType,
   });
-  const baseUrl = useCodeServerBase();
+  const { settings, loading: settingsLoading } = useSettings();
+  const baseUrl = useCodeServerBase(settings);
   const ticket = useGateTicket();
 
   const folder = data?.path ?? "";
@@ -432,6 +454,7 @@ export function CodeServerContextTab(_props: SlotProps) {
     [baseUrl, folder, ticket],
   );
 
+  if (settingsLoading) return <div style={STATUS_STYLE}>正在读取插件配置…</div>;
   if (frameUrl) return <CodeFrame frameUrl={frameUrl} title="code-server" />;
   return (
     <div style={STATUS_STYLE}>
@@ -447,15 +470,20 @@ export function CodeServerContextTab(_props: SlotProps) {
  * no page chrome or navigation controls.
  */
 export function CodeServerPage(_props: SlotProps) {
-  const baseUrl = useCodeServerBase();
+  const { settings, loading } = useSettings();
+  const baseUrl = useCodeServerBase(settings);
   const ticket = useGateTicket();
   const frameUrl = useMemo(
-    () => withGateTicket(buildCodeServerUrl(baseUrl, PAGE_FOLDER), ticket),
-    [baseUrl, ticket],
+    () => withGateTicket(buildCodeServerUrl(baseUrl, settings.pageFolder), ticket),
+    [baseUrl, settings.pageFolder, ticket],
   );
   return (
     <div style={{ height: "calc(100vh - 8rem)", minHeight: "400px" }}>
-      <CodeFrame frameUrl={frameUrl} title="code-server" />
+      {loading ? (
+        <div style={STATUS_STYLE}>正在读取插件配置…</div>
+      ) : (
+        <CodeFrame frameUrl={frameUrl} title="code-server" />
+      )}
     </div>
   );
 }

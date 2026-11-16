@@ -52,3 +52,33 @@ test("withGateTicket appends cs_t before the fragment and keeps folder", () => {
   assert.equal(withGateTicket("https://x/#frag", "v1.1.abc"), "https://x/?cs_t=v1.1.abc#frag");
   assert.equal(withGateTicket(url, null), url);
 });
+
+test("explicit base URL wins over derivation", () => {
+  assert.equal(
+    deriveCodeServerBase(
+      { protocol: "https:", hostname: "app.example.com", port: "443" },
+      { baseUrl: "https://code.example.com/", codeServerPort: 19081 },
+    ),
+    "https://code.example.com",
+  );
+});
+
+test("configured ports drive the sibling-host rewrite", () => {
+  assert.equal(
+    deriveCodeServerBase(
+      { protocol: "https:", hostname: "dev-19500.example.com", port: "8443" },
+      { paperclipPort: 19500, codeServerPort: 19443 },
+    ),
+    "https://dev-19443.example.com:8443",
+  );
+});
+
+test("configured code-server port is used for loopback", () => {
+  assert.equal(
+    deriveCodeServerBase({ protocol: "http:", hostname: "localhost", port: "19500" }, {
+      paperclipPort: 19500,
+      codeServerPort: 19443,
+    }),
+    "http://localhost:19443",
+  );
+});

@@ -1,90 +1,148 @@
-# Paperclip 插件：Code Server（qnnp.codeserver）
+# paperclip-plugin-codeserver
 
-在 Paperclip 里直接打开 code-server。三个插槽：
+在 [Paperclip](https://github.com/paperclipai/paperclip) 里直接打开 [code-server](https://github.com/coder/code-server)（VS Code Web）。插件的所有部署差异（地址、端口、目录、自动登录秘密文件）都是**配置项**，改配置不需要重新构建。
 
-- `globalToolbarButton`（页面顶栏「Code」）——**唯一入口**，按当前页面是哪个任务/项目解析工作区，点击后整屏打开该目录；非任务/项目页不渲染。
-- `detailTab`（只声明 `issue`）——任务页属性侧栏里的「Code」tab：无工具条、无目录选择，编辑器占满 tab。关掉后可从「+ 新建 tab」里重新打开。
-- `page`（`/:companyPrefix/plugins/:实例UUID`）——直接访问时的全屏编辑器，无返回按钮等页面装饰。
+- 顶栏「Code」：按当前页面的任务/项目解析它自己的工作区目录，整屏打开；非任务/项目页不渲染。
+- 任务属性侧栏「Code」tab：只有编辑器，占满 tab；关掉后可从「+ 新建 tab」重新打开。
+- 插件页 `/:companyPrefix/plugins/<实例UUID>`：全屏编辑器，默认目录来自配置。
+- 可选自动登录：插件 worker 签一张短时票据，容器内 [cs-gate 代理](proxy/) 在服务端换成会话 cookie，浏览器不见登录页。**不配代理也能用**，只是每个浏览器登录一次。
 
-默认的聊天壳任务页不渲染主 Tab 条，所以 `detailTab` 由宿主属性侧栏复用（见宿主补丁）。
-
-## 结构
+## 目录
 
 ```
-src/manifest.ts        manifest（id qnnp.codeserver，能力 ui.page.register + ui.action.register）
-src/worker.ts          空壳 worker（manifest 必填 entrypoints.worker），onIdleDrain 返回 none，不挡实例休眠
-src/ui/index.tsx       三个插槽组件：CodeServerToolbarButton / CodeServerContextTab / CodeServerPage
-src/shared/urls.ts     纯函数：推导 code-server 地址、拼 ?folder= 深链
-esbuild.config.mjs     manifest+worker（bundle SDK）与 UI（react 外置）三个产物
-test/                  URL 单测 + UI 渲染冒烟测试（node:test）
+src/manifest.ts        manifest：三个 UI 槽 + instanceConfigSchema（配置项schema）
+src/config.ts          配置默认值、归一化、校验（纯函数，worker 与 UI 共用）
+src/plugin.ts          worker 定义：workspace / settings / gate 三个 data 方法
+src/worker.ts          worker RPC 入口
+src/resolve.ts         任务/项目 → 工作区目录（走宿主 read 能力）
+src/gate.ts            cs-gate 票据签名（HMAC-SHA256）
+src/shared/urls.ts     地址推导、?folder= 深链、票据拼接（纯函数）
+src/shared/workspace.ts 目录选择逻辑（纯函数）
+src/ui/index.tsx       三个槽组件 + 加载层
+proxy/                 可选的 cs-gate 自动登录代理（单文件，仅 Node 内置模块）
+test/                  node:test；含 SDK 内存宿主的真能力门禁测试
 ```
 
-产物（`dist/`，不入库）：
+`dist/` 不入库，由 `npm run build` 生成（`manifest.js` / `worker.js` / `ui/index.js`）。
 
-- `dist/manifest.js`
-- `dist/worker.js`（已打包 `@paperclipai/plugin-sdk`，运行时不需要 node_modules）
-- `dist/ui/index.js`（ESM，`react` / `react/jsx-runtime` 保持为裸导入，由 Paperclip UI 在加载时改写）
+## 环境要求
 
-## 构建与测试
+| 组件 | 版本 / 说明 |
+| --- | --- |
+| Paperclip | `2026.1106.0`（插件 API v1；manifest 里 `minimumHostVersion` 未钉，按该版本开发） |
+| Node.js | ≥ 20（构建与 worker） |
+| code-server | 4.x，独立安装包；监听一个端口即可 |
+| cs-gate（可选） | 仅用于自动登录，见 [`proxy/`](proxy/) |
+
+Paperclip UI 与 code-server 需要**同站**（同一 eTLD+1），iframe 里的会话 cookie（`SameSite=Lax`）才会发送。跨站会退化成登录页；这是浏览器策略，不是插件能绕的。
+
+## 安装
+
+插件走 Paperclip 的本地路径安装（实例管理员操作；`Settings → Plugins` 的对话框只收 npm 包名，本地路径用 CLI）：
 
 ```bash
-cd plugins/codeserver
-npm install
+git clone https://github.com/qnnp-me/paperclip-plugin-codeserver.git
+cd paperclip-plugin-codeserver
+npm ci && npm run build
+
+paperclipai plugin install "$PWD" --local \
+  --api-base https://<your-paperclip-host>
+```
+
+首次会打印板端授权链接；装完 `paperclipai plugin list` 里应见 `qnnp.codeserver` / `ready`。升级：
+
+```bash
+git pull && npm ci && npm run build
+paperclipai plugin upgrade qnnp.codeserver --api-base https://<your-paperclip-host>
+```
+
+> 升级读的是数据库里记录的**安装路径**。仓库搬过家时，在该旧路径放一个指向新目录的软链，或先 `plugin uninstall qnnp.codeserver --force` 再从新路径安装。
+
+## 配置
+
+### 设置页（推荐）
+
+`Settings → Plugins → Code Server`（`/settings/plugins/qnnp.codeserver`），按公司保存。表单由 manifest 的 `instanceConfigSchema` 生成；保存时会跑 worker 的 `onValidateConfig`，非法值直接被拒。
+
+### CLI
+
+```bash
+paperclipai plugin config:set qnnp.codeserver \
+  --company-id <company-uuid> \
+  --payload-json @config.example.json \
+  --api-base https://<your-paperclip-host>
+
+paperclipai plugin config qnnp.codeserver --company-id <company-uuid>   # 回读
+```
+
+配置在每次打开编辑器时由 worker 读取（`ctx.config.get(companyId)`），改完刷新页面/重开 tab 即生效。
+
+### 配置项
+
+| 键 | 类型 | 默认 | 作用 |
+| --- | --- | --- | --- |
+| `codeServerBaseUrl` | string | `""` | code-server 完整公开地址。留空则按当前页面推导：把 host 里的 `paperclipPort` 换成 `codeServerPort`；loopback 用 `codeServerPort`。 |
+| `codeServerPort` | integer | `19081` | 推导地址时使用的 code-server 端口。 |
+| `paperclipPort` | integer | `19099` | 推导同主机地址时，从页面 host 里替换掉的端口。 |
+| `pageFolder` | string | `/home/linuxbrew/Projects` | 插件页（无任务/项目上下文）显示的目录，绝对路径。 |
+| `gateSecretFile` | string | `/home/linuxbrew/.startup/code-server-gate.secret` | 与 cs-gate 共用的 600 秘密文件，绝对路径。读不到时退回登录页（不报错）。 |
+| `gateTicketTtlSeconds` | integer | `300` | 自动登录票据有效期（30–3600 秒）。 |
+
+**配置里不放任何秘密值**：只存秘密文件的路径。code-server 口令仍在自己的 600 env 文件里，代理启动时用它换会话。
+
+### 运行时环境（服务侧）
+
+这些是 code-server / cs-gate 自己的环境变量，不是插件配置；默认值与容器内现状一致：
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `PASSWORD` | — | code-server 登录口令，放在 600 的 env 文件（如 `.startup/code-server.env`）。 |
+| `CS_GATE_LISTEN` | `0.0.0.0:19081` | cs-gate 监听地址（替代 code-server 对外端口）。 |
+| `CS_GATE_UPSTREAM` | `127.0.0.1:19083` | code-server 真实监听地址。 |
+| `CS_GATE_SECRET_FILE` | `/home/linuxbrew/.startup/code-server-gate.secret` | 票据 HMAC 秘密（与 `gateSecretFile` 指向同一文件）。 |
+| `CODE_SERVER_ENV_FILE` | `/home/linuxbrew/.startup/code-server.env` | 代理从这里读 `PASSWORD` 自行登录。 |
+| `CS_GATE_TICKET_TTL` | `300` | 代理侧接受的票据 TTL（插件签发的 TTL 不应超过它）。 |
+| `CS_GATE_COOKIE_TTL` | `43200` | 换发的会话 cookie 有效期（12 小时）。 |
+
+## 自动登录（可选）
+
+1. code-server 改为只监听容器内端口（如 `127.0.0.1:19083`）。
+2. 启动 `proxy/proxy.mjs`，它监听原对外端口（如 `19081`）。
+3. 生成一个 ≥32 字符的共享秘密，写到 `gateSecretFile` 指向的 600 文件；插件与代理各读一份。
+4. 插件为每次打开签 5 分钟票据（`?cs_t=…`）→ 代理验签 → 服务端换发 12 小时 cookie → 302 到干净地址。
+
+不带票据/ cookie 的直链仍落到 code-server 自己的登录页，不回归。代理细节与运维命令见 [`proxy/README.md`](proxy/README.md)。
+
+## 开发
+
+```bash
+npm ci
+npm run dev     # esbuild watch：manifest / worker / ui
 npm run build
-npm test        # 22 个断言：URL 推导、目录解析优先级、能力门禁、插槽静态渲染
+npm test        # node:test，43 个断言
 ```
 
-## 安装（需要实例管理员）
+CI（GitHub Actions）在每次 push / PR 上跑 `npm ci && npm run build && npm test`。
 
-首次安装（实例管理员；第一次会要求板端授权，token 存本地）：
+测试覆盖：配置归一化与校验、地址推导（含自定义端口与显式 URL）、票据签名与代理侧验签、目录解析优先级、SDK 内存宿主上的真能力门禁、UI 静态渲染（加载层、配置覆盖、无 iframe 直出）。
 
-```bash
-paperclipai plugin install /home/linuxbrew/Projects/qnnp-opc/plugins/codeserver \
-  --local --api-base https://paperclip-19099.example.com:18443
-```
+### 改动守则
 
-已装过则用升级（`install` 会报 `Plugin already installed`）：
+- 新增部署相关的值 → 加到 `src/config.ts` 的默认值与 `instanceConfigSchema`，不要写死进 UI。
+- `dist/` 不入库；发布前 `npm run build && npm test` 必须干净。
+- 版本按 semver 走；manifest 的 `version` 与 `package.json` 同步。
+- 新增能力项（`capabilities`）会让升级停在 `upgrade_pending` 等管理员批准；能不加就不加。
 
-```bash
-paperclipai plugin upgrade qnnp.codeserver --api-base https://paperclip-19099.example.com:18443
-```
+## 安全边界
 
-确认：
+- 插件 UI 是 Paperclip 主应用内的同源 ES module；能力项管不住前端，只装可信插件。
+- cs-gate 换发的会话是**全局共享**的（code-server 本身没有 per-user 概念）。要按人限制，得在代理里带上身份，或在宿主机反代加 `auth_request`。
+- 会话 cookie 12 小时；连续开 tab 超过后掉回登录页，重开 tab 会换新票据。
 
-```bash
-paperclipai plugin list --api-base https://paperclip-19099.example.com:18443   # 应见 0.4.0 ready
-```
+## 从 qnnp-opc 单仓迁出
 
-浏览器里刷新任意任务页/项目页，顶栏出现「Code」按钮。插件页入口是 `…/CMP/plugins/<实例 UUID>`（不是插件 key）。
+本仓库由 `qnnp-opc` 的 `plugins/codeserver/` 用 `git subtree split` 提取，保留了原有提交历史。原仓库只留一条指向本仓库的说明；安装路径的兼容软链由部署侧维护，不入库。
 
-## 运行时行为
+## License
 
-- code-server 地址由当前页面推导：`paperclip-19099…` → `paperclip-19081…`，端口不变；loopback 时用 `:19081`。
-- 顶栏按钮按当前页面解析目录：任务优先执行工作区 `cwd`，否则所属项目主工作区；项目用主工作区。项目 URL 是 `urlKey` 时，插件先用宿主只读 API 换成 UUID，再走 bridge（无需额外能力项）。
-- 侧栏 tab 只渲染编辑器；工作区解析失败时显示一行错误，不提供手改目录。
-- 插件页目录固定 `/home/linuxbrew/Projects`。
-- code-server 与 Paperclip 同站（`*.example.com`），会话 cookie `SameSite=Lax` 在 iframe 里照常发送；首次在 iframe 内登录一次即可。浮层用 Esc 关闭。
-
-## 卸载
-
-```bash
-paperclipai plugin uninstall qnnp.codeserver --api-base https://paperclip-19099.example.com:18443
-```
-
-## 已知边界
-
-- iframe 依赖「同站」前提。换域名、上游加 `frame-src`、code-server 加 `frame-ancestors` 都会让它退化成「新标签打开」。
-- 插件 UI 是 Paperclip 主应用里的同源 ES module，能力项管不住前端，只装自己写的插件。
-- worker 常驻进程会跟着实例起；`onIdleDrain` 返回 `none`，没有定时器/套接字，不阻止 idle sleep。
-
-## 0.5.0 — 自动登录（配合 cs-gate 代理）
-
-- 新增 worker 数据方法 `gate`：用共享秘密签 5 分钟票据（`v1.<exp>.<HMAC>`），UI 拼 `&cs_t=` 到 iframe URL
-- 拿不到秘密文件时返回 `null`，UI 退回纯 `?folder=` 直链（code-server 登录页），不报错
-- 代理与服务端配置见 `/home/linuxbrew/.local/opt/cs-gate/README.md`
-
-## 0.5.1 — 打开时的加载提示
-
-- iframe 保持立即挂载（照常开始下载），覆盖一层居中的 loader：转圈 + 「正在加载编辑器…」+ 「首次打开需要下载 VS Code 前端，通常 5–15 秒」
-- `load` 事件触发后移除 loader；>12 秒仍未加载完则追加「在新标签里打开」兜底链接
-- 顶栏浮层、侧栏 tab、插件页三处共用同一个 `CodeFrame`，行为一致
+MIT，见 [LICENSE](LICENSE)。

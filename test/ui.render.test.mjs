@@ -28,6 +28,8 @@ const { createElement } = await import("react");
 const { renderToStaticMarkup } = await import("react-dom/server");
 
 /** Stub host context + data handler results, as the host bridge would. */
+let settingsResult = { data: null, loading: false, error: null, refresh() {} };
+let gateResult = { data: null, loading: false, error: null, refresh() {} };
 let dataResult = {
   data: {
     path: "/home/linuxbrew/Projects/qnnp-opc",
@@ -53,7 +55,11 @@ let hostContext = {
 globalThis.__paperclipPluginBridge__ = {
   react: { createElement },
   sdkUi: {
-    usePluginData: () => dataResult,
+    usePluginData: (key) => {
+      if (key === "settings") return settingsResult;
+      if (key === "gate") return gateResult;
+      return dataResult;
+    },
     useHostContext: () => hostContext,
   },
 };
@@ -134,5 +140,38 @@ test("CodeServerContextTab surfaces resolution errors instead of guessing a fold
       error: null,
       refresh() {},
     };
+  }
+});
+
+test("operator settings override the deployment URL and page folder", () => {
+  settingsResult = {
+    data: {
+      codeServerBaseUrl: "https://code.example.com/",
+      codeServerPort: 19081,
+      paperclipPort: 19099,
+      pageFolder: "/srv/workspaces",
+      gateSecretFile: "/srv/secrets/cs-gate.secret",
+      gateTicketTtlSeconds: 300,
+    },
+    loading: false,
+    error: null,
+    refresh() {},
+  };
+  try {
+    const page = renderToStaticMarkup(createElement(ui.CodeServerPage, { slot, context }));
+    assert.match(page, /src="https:\/\/code\.example\.com\/\?folder=%2Fsrv%2Fworkspaces"/);
+  } finally {
+    settingsResult = { data: null, loading: false, error: null, refresh() {} };
+  }
+});
+
+test("while plugin settings are loading, no iframe is mounted with a guessed URL", () => {
+  settingsResult = { data: null, loading: true, error: null, refresh() {} };
+  try {
+    const html = renderToStaticMarkup(createElement(ui.CodeServerPage, { slot, context }));
+    assert.doesNotMatch(html, /<iframe/);
+    assert.match(html, /正在读取插件配置/);
+  } finally {
+    settingsResult = { data: null, loading: false, error: null, refresh() {} };
   }
 });

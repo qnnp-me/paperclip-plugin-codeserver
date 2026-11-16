@@ -1,0 +1,11 @@
+{
+  "companyId": "<company-uuid>",
+  "configJson": {
+    "codeServerBaseUrl": "",
+    "codeServerPort": 19081,
+    "paperclipPort": 19099,
+    "pageFolder": "/home/linuxbrew/Projects",
+    "gateSecretFile": "/home/linuxbrew/.startup/code-server-gate.secret",
+    "gateTicketTtlSeconds": 300
+  }
+}

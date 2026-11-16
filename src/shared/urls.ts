@@ -6,22 +6,43 @@
 export type LocationLike = { protocol: string; hostname: string; port: string };
 
 /**
- * code-server runs next to the Paperclip UI on the same host family:
- * `paperclip-19099…` (Paperclip) ↔ `paperclip-19081…` (code-server).
- * Derive the sibling host instead of hardcoding the deployment domain; the
- * page UI also lets the operator override the result.
+ * Deployment values that affect the derived URL. Both come from operator
+ * config, so moving the UI or code-server to other ports needs no rebuild.
  */
-export function deriveCodeServerBase(loc: LocationLike): string {
+export type PortConfig = {
+  /** Explicit base URL; wins over any derivation when non-empty. */
+  baseUrl?: string | null;
+  /** code-server port (default 19081). */
+  codeServerPort?: number | null;
+  /** Paperclip UI port to replace in the page host (default 19099). */
+  paperclipPort?: number | null;
+};
+
+/**
+ * code-server normally runs next to the Paperclip UI on the same host family:
+ * `paperclip.example.com` (UI) ↔ `code-…` (editor). Derive the sibling host by
+ * swapping the configured Paperclip port for the configured code-server port;
+ * loopback always uses the code-server port. The settings form can pin an
+ * explicit `codeServerBaseUrl` instead.
+ */
+export function deriveCodeServerBase(loc: LocationLike, config: PortConfig = {}): string {
+  const explicit = config.baseUrl?.trim();
+  if (explicit) return trimTrailingSlash(explicit);
+
+  const codeServerPort = config.codeServerPort ?? 19081;
+  const paperclipPort = config.paperclipPort ?? 19099;
   const { protocol, hostname, port } = loc;
   const portSuffix = port ? `:${port}` : "";
-  if (/(^|[.-])19099([.-]|$)/.test(hostname)) {
+
+  const marker = new RegExp(`(^|[.-])${paperclipPort}([.-]|$)`);
+  if (marker.test(hostname)) {
     return `${protocol}//${hostname.replace(
-      /(^|[.-])19099([.-]|$)/g,
-      (_match, before: string, after: string) => `${before}19081${after}`,
+      new RegExp(`(^|[.-])${paperclipPort}([.-]|$)`, "g"),
+      (_match, before: string, after: string) => `${before}${codeServerPort}${after}`,
     )}${portSuffix}`;
   }
   if (hostname === "127.0.0.1" || hostname === "localhost") {
-    return `${protocol}//${hostname}:19081`;
+    return `${protocol}//${hostname}:${codeServerPort}`;
   }
   return `${protocol}//${hostname}${portSuffix}`;
 }

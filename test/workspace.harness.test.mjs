@@ -166,3 +166,48 @@ test("missing company scope is rejected before touching host data", async () => 
     /缺少 companyId/,
   );
 });
+test("settings data exposes operator config with defaults merged in", async () => {
+  const harness = createTestHarness({
+    manifest,
+    config: { pageFolder: "/srv/workspaces", gateTicketTtlSeconds: 600 },
+  });
+  seed(harness);
+  await pluginDefinition.definition.setup(harness.ctx);
+
+  const settings = await harness.getData("settings", { companyId: COMPANY_ID });
+  assert.equal(settings.pageFolder, "/srv/workspaces");
+  assert.equal(settings.gateTicketTtlSeconds, 600);
+  assert.equal(settings.codeServerPort, 19081);
+  // Secret material stays on disk: only the path crosses the bridge.
+  assert.equal(settings.gateSecretFile, "/home/linuxbrew/.startup/code-server-gate.secret");
+});
+
+test("gate tickets honor the configured secret file and TTL", async () => {
+  const fs = await import("node:fs");
+  const file = "/tmp/cs-gate-harness.secret";
+  const secret = "e".repeat(40);
+  fs.writeFileSync(file, `${secret}\n`, { mode: 0o600 });
+
+  const harness = createTestHarness({
+    manifest,
+    config: { gateSecretFile: file, gateTicketTtlSeconds: 120 },
+  });
+  seed(harness);
+  await pluginDefinition.definition.setup(harness.ctx);
+
+  const ticket = await harness.getData("gate", { companyId: COMPANY_ID });
+  assert.equal(ticket.ttl, 120);
+  const { createHmac } = await import("node:crypto");
+  const [version, exp, mac] = ticket.token.split(".");
+  assert.equal(version, "v1");
+  assert.equal(
+    mac,
+    createHmac("sha256", secret).update(`v1.${exp}`).digest("base64url").slice(0, 32),
+  );
+});
+
+test("validateConfig rejects a relative folder before the operator saves it", async () => {
+  const result = await pluginDefinition.definition.onValidateConfig({ pageFolder: "Projects" });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((message) => message.includes("pageFolder")));
+});

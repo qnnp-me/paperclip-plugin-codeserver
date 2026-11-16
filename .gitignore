@@ -1,0 +1,10 @@
+# deps / build (dist is built by npm run build, never committed)
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# local operator config / secrets
+.env
+.env.*
+config.local.json

@@ -58,3 +58,18 @@ test("readGateSecret refuses a too-short secret file", () => {
     else process.env.CODESERVER_GATE_SECRET_FILE = previous;
   }
 });
+
+test("ticket TTL and secret file come from options (plugin config)", () => {
+  const fs = require("node:fs");
+  const file = "/tmp/cs-gate-config.secret";
+  const secret = "d".repeat(40);
+  fs.writeFileSync(file, `${secret}\n`, { mode: 0o600 });
+  const now = 1_700_000_000_000;
+  const ticket = issueGateTicket({ ttlSeconds: 600, secretFile: file, nowMs: now });
+  assert.equal(ticket.ttl, 600);
+  assert.equal(proxyVerifies(ticket.token, secret, now), true);
+});
+
+test("an unreadable configured secret file degrades to null", () => {
+  assert.equal(issueGateTicket({ secretFile: "/nonexistent/configured.secret" }), null);
+});
