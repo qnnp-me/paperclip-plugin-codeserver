@@ -66,6 +66,14 @@ function writeStored(key: string, value: string): void {
   }
 }
 
+function clearStored(key: string): void {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    /* storage may be unavailable; the in-memory state still works */
+  }
+}
+
 const styles = {
   root: {
     display: "flex",
@@ -281,9 +289,10 @@ export function CodeServerContextTab() {
 
   const [baseUrl, setBaseUrl] = useCodeServerBase();
   const defaultBase = useMemo(() => deriveCodeServerBase(window.location), []);
-  const [customFolder, setCustomFolder] = useState<string | null>(() =>
-    entityKey ? readStored(entityKey) : null,
-  );
+  const [customFolder, setCustomFolder] = useState<string | null>(() => {
+    const stored = entityKey ? readStored(entityKey) : null;
+    return stored && stored.trim() ? stored : null;
+  });
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
@@ -306,7 +315,7 @@ export function CodeServerContextTab() {
 
   const resetToResolved = useCallback(() => {
     setCustomFolder(null);
-    if (entityKey) writeStored(entityKey, "");
+    if (entityKey) clearStored(entityKey);
     setEditing(false);
     setReloadKey((value) => value + 1);
   }, [entityKey]);
