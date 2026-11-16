@@ -8,6 +8,7 @@
   "scripts": {
     "build": "node ./esbuild.config.mjs",
     "dev": "node ./esbuild.config.mjs --watch",
+    "pretest": "node ./esbuild.config.mjs",
     "test": "node --test test/config.test.mjs test/urls.test.mjs test/gate.test.mjs test/workspace.test.mjs test/workspace.harness.test.mjs test/ui.render.test.mjs"
   },
   "paperclipPlugin": {
