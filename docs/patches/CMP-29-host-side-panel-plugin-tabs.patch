@@ -1,0 +1,661 @@
+diff --git a/ui/src/components/BreadcrumbBar.test.tsx b/ui/src/components/BreadcrumbBar.test.tsx
+index 8ba15e3..5c69f51 100644
+--- a/ui/src/components/BreadcrumbBar.test.tsx
++++ b/ui/src/components/BreadcrumbBar.test.tsx
+@@ -9,6 +9,7 @@ import { BreadcrumbBar } from "./BreadcrumbBar";
+ const viewport = vi.hoisted(() => ({ isMobile: false }));
+ 
+ vi.mock("@/lib/router", () => ({
++  useLocation: () => ({ pathname: "/" }),
+   Link: ({ children, className, to }: { children: ReactNode; className?: string; to: string }) => (
+     <a className={className} href={to}>{children}</a>
+   ),
+diff --git a/ui/src/components/BreadcrumbBar.tsx b/ui/src/components/BreadcrumbBar.tsx
+index 9684c36..3b83473 100644
+--- a/ui/src/components/BreadcrumbBar.tsx
++++ b/ui/src/components/BreadcrumbBar.tsx
+@@ -1,4 +1,4 @@
+-import { Link } from "@/lib/router";
++import { Link, useLocation } from "@/lib/router";
+ import { Menu, PanelRightClose, PanelRightOpen } from "lucide-react";
+ import { useBreadcrumbs } from "../context/BreadcrumbContext";
+ import { useSidebar } from "../context/SidebarContext";
+@@ -18,7 +18,13 @@ import { PluginSlotOutlet, usePluginSlots } from "@/plugins/slots";
+ import { PluginLauncherOutlet, usePluginLaunchers } from "@/plugins/launchers";
+ import { cn } from "../lib/utils";
+ 
+-type GlobalToolbarContext = { companyId: string | null; companyPrefix: string | null };
++type GlobalToolbarContext = {
++  companyId: string | null;
++  companyPrefix: string | null;
++  /** Current page's task/project, so toolbar buttons can act on it. */
++  entityId?: string | null;
++  entityType?: "issue" | "project" | null;
++};
+ 
+ /** Task identifier rendered in gray monospace beside its breadcrumb label. */
+ function CrumbIdentifier({ identifier }: { identifier?: string }) {
+@@ -65,13 +71,39 @@ export function BreadcrumbBar({ taskDetailLayout = false }: { taskDetailLayout?:
+   const taskPanelOpen = breadcrumbPanelControl?.open ?? panelVisible;
+   const toggleTaskPanel = breadcrumbPanelControl?.onToggle ?? togglePanelVisible;
+ 
+-  const globalToolbarSlotContext = useMemo(
+-    () => ({
++  const location = useLocation();
++  const globalToolbarSlotContext = useMemo(() => {
++    // BreadcrumbBar sits above the routed page, so `useParams` cannot see the
++    // child route's ids; parse the path instead. This is what lets a toolbar
++    // button act on the task/project currently on screen.
++    const segments = location.pathname.split("/").filter(Boolean).map((segment) => {
++      try {
++        return decodeURIComponent(segment);
++      } catch {
++        return segment;
++      }
++    });
++    let entityId: string | null = null;
++    let entityType: "issue" | "project" | null = null;
++    for (let index = 0; index < segments.length - 1; index += 1) {
++      if (segments[index] === "issues") {
++        entityId = segments[index + 1] ?? null;
++        entityType = "issue";
++        break;
++      }
++      if (segments[index] === "projects") {
++        entityId = segments[index + 1] ?? null;
++        entityType = "project";
++        break;
++      }
++    }
++    return {
+       companyId: selectedCompanyId ?? null,
+       companyPrefix: selectedCompany?.issuePrefix ?? null,
+-    }),
+-    [selectedCompanyId, selectedCompany?.issuePrefix],
+-  );
++      entityId,
++      entityType,
++    };
++  }, [selectedCompanyId, selectedCompany?.issuePrefix, location.pathname]);
+ 
+   const globalToolbarSlots = (
+     <GlobalToolbar
+diff --git a/ui/src/components/WorkspaceFileBrowser.tsx b/ui/src/components/WorkspaceFileBrowser.tsx
+index 56314f2..b509111 100644
+--- a/ui/src/components/WorkspaceFileBrowser.tsx
++++ b/ui/src/components/WorkspaceFileBrowser.tsx
+@@ -535,6 +535,10 @@ export function WorkspaceFileBrowser({
+   const listboxId = useId();
+   const inputRef = useRef<HTMLInputElement>(null);
+   const scrollContainerRef = useRef<HTMLDivElement>(null);
++  // Guards the seed effect against re-applying our own browse-state echo:
++  // the parent writes a tab payload one commit behind the keystroke, so
++  // without this the search box overwrites what the user just typed.
++  const echoRef = useRef<{ q: string | null; folderPath: string | null } | null>(null);
+ 
+   const projectsQuery = useQuery({
+     queryKey: companyId ? queryKeys.projects.list(companyId) : ["projects", "__none__"],
+@@ -585,9 +589,15 @@ export function WorkspaceFileBrowser({
+   }, [initialProjectId, initialWorkspaceId]);
+ 
+   useEffect(() => {
+-    setFolderPath(effectiveInitialFolderPath ?? null);
++    const nextQuery = initialQuery?.trim() ?? "";
++    const nextFolderPath = effectiveInitialFolderPath ?? null;
++    if (echoRef.current && echoRef.current.q === nextQuery && echoRef.current.folderPath === nextFolderPath) {
++      return;
++    }
++    echoRef.current = null;
++    setFolderPath(nextFolderPath);
+     setSearchInput(initialQuery ?? "");
+-    setDebouncedQuery(initialQuery?.trim() ?? "");
++    setDebouncedQuery(nextQuery);
+   }, [effectiveInitialFolderPath, initialQuery]);
+ 
+   useEffect(() => {
+@@ -617,14 +627,18 @@ export function WorkspaceFileBrowser({
+     ? { projectId: targetProjectId, workspaceId: targetWorkspaceId }
+     : {};
+ 
++  const browseStateRef = useRef(onBrowseStateChange);
++  browseStateRef.current = onBrowseStateChange;
+   useEffect(() => {
+-    onBrowseStateChange?.({
++    const next = {
+       q: searchInput.trim() || null,
+       folderPath,
+       projectId: targetProjectId,
+       workspaceId: targetWorkspaceId,
+-    });
+-  }, [folderPath, onBrowseStateChange, searchInput, targetProjectId, targetWorkspaceId]);
++    };
++    echoRef.current = next;
++    browseStateRef.current?.(next);
++  }, [folderPath, searchInput, targetProjectId, targetWorkspaceId]);
+ 
+   const listQueryKey = useMemo(() => queryKeys.issues.fileResources(issueId, {
+       workspace: effectiveWorkspace,
+diff --git a/ui/src/components/side-panel/SidePanelTabs.tsx b/ui/src/components/side-panel/SidePanelTabs.tsx
+index eae30ea..a741e28 100644
+--- a/ui/src/components/side-panel/SidePanelTabs.tsx
++++ b/ui/src/components/side-panel/SidePanelTabs.tsx
+@@ -202,7 +202,10 @@ export function SidePanelTabs({
+     observer?.observe(element);
+     labels.forEach((label) => observer?.observe(label));
+     return () => observer?.disconnect();
+-  }, [appearance, tabs]);
++    // Measure only when the tab set changes, not when a tab payload updates:
++    // payload-driven re-renders used to re-run this layout effect forever.
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [appearance, tabIds.join("|")]);
+ 
+   function findTabElement(tabId: string, selector: "wrapper" | "target") {
+     const attribute = selector === "wrapper"
+diff --git a/ui/src/components/task-chat/TaskChatComposer.tsx b/ui/src/components/task-chat/TaskChatComposer.tsx
+index 8d162be..d0de375 100644
+--- a/ui/src/components/task-chat/TaskChatComposer.tsx
++++ b/ui/src/components/task-chat/TaskChatComposer.tsx
+@@ -644,7 +644,7 @@ export function TaskChatComposer({
+   const assigneeLabel =
+     reassignOptions?.find((o) => o.id === assigneeValue)?.label ?? "Unassigned";
+   const assigneeName =
+-    assigneeLabel === "Unassigned" ? "the agent" : assigneeLabel;
++    assigneeLabel === "Unassigned" ? "智能体" : assigneeLabel;
+   const effectivePlaceholder = queuedEdit
+     ? "Edit queued message…"
+     : (placeholder ?? modePlaceholder(pendingMode, assigneeName, mobile));
+diff --git a/ui/src/components/task-side-panel/TaskSidePanel.test.tsx b/ui/src/components/task-side-panel/TaskSidePanel.test.tsx
+index 2e2a9f6..51f11e4 100644
+--- a/ui/src/components/task-side-panel/TaskSidePanel.test.tsx
++++ b/ui/src/components/task-side-panel/TaskSidePanel.test.tsx
+@@ -74,6 +74,14 @@ vi.mock("@/components/task-detail/TaskDetailRelationsPanel", () => ({
+   ),
+ }));
+ 
++const pluginTabsFixture = vi.hoisted(() => ({ slots: [] as unknown[] }));
++vi.mock("@/plugins/slots", () => ({
++  usePluginSlots: () => ({ slots: pluginTabsFixture.slots, isLoading: false, errorMessage: null }),
++  PluginSlotMount: ({ slot }: { slot: { displayName: string } }) => (
++    <div>{`Plugin mount ${slot.displayName}`}</div>
++  ),
++}));
++
+ const agentChat = vi.hoisted(() => ({ enabled: true }));
+ vi.mock("@/hooks/useAgentChatEnabled", () => ({
+   useAgentChatEnabled: () => ({ enabled: agentChat.enabled, loaded: true }),
+@@ -132,6 +140,7 @@ describe("TaskSidePanel", () => {
+     window.localStorage.clear();
+     browserFixture.data = [];
+     browserFixture.control.mockClear();
++    pluginTabsFixture.slots = [];
+     fixture.documents = [];
+     fixture.plan = null;
+     routeFixture.location.search = "";
+@@ -201,6 +210,35 @@ describe("TaskSidePanel", () => {
+     expect(container.querySelector("[data-artifact-upload-slot]")).toBeNull();
+   });
+ 
++  it("adds plugin detail tabs to the chat-shell side panel and mounts them", async () => {
++    pluginTabsFixture.slots = [{
++      id: "codeserver-detail-tab",
++      type: "detailTab",
++      displayName: "Code",
++      exportName: "CodeServerContextTab",
++      pluginId: "plugin-instance-1",
++      pluginKey: "qnnp.codeserver",
++      pluginDisplayName: "Code Server",
++      pluginVersion: "0.3.0",
++    }];
++    await render(panel());
++    const tab = container.querySelector<HTMLElement>('[data-side-panel-tab-target="plugin:codeserver-detail-tab"]');
++    expect(tab).not.toBeNull();
++    await act(async () => tab?.click());
++    expect(container.textContent).toContain("Plugin mount Code");
++    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Close Code"]')?.click());
++    expect(container.querySelector('[data-side-panel-tab-target="plugin:codeserver-detail-tab"]')).toBeNull();
++
++    // Closing must not strand the tab: the + launcher lists it again.
++    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Open a new tab"]')?.click());
++    const launcherItem = Array.from(document.body.querySelectorAll<HTMLElement>('[role="option"]'))
++      .find((item) => item.textContent?.includes("Code"));
++    expect(launcherItem).not.toBeUndefined();
++    await act(async () => launcherItem?.click());
++    expect(container.querySelector('[data-side-panel-tab-target="plugin:codeserver-detail-tab"]')).not.toBeNull();
++    expect(container.textContent).toContain("Plugin mount Code");
++  });
++
+   it("opens, deduplicates, switches and closes text attachment tabs", async () => {
+     const onAttachmentOpened = vi.fn();
+     await render(panel({ openAttachment: { id: "file-1", title: "AGENTS.md", requestId: 1 }, onAttachmentOpened }));
+@@ -686,4 +724,60 @@ describe("TaskSidePanel", () => {
+       expect.objectContaining({ replace: false }),
+     );
+   });
++
++  it("does not mint ?browse=1 when the Files tab is opened from the launcher", async () => {
++    await render(panel({ fileTabsEnabled: true }));
++    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Open a new tab"]')?.click());
++    const filesItem = Array.from(document.body.querySelectorAll<HTMLElement>('[role="option"]'))
++      .find((item) => item.textContent?.includes("Files"));
++    expect(filesItem).not.toBeUndefined();
++    await act(async () => filesItem?.click());
++
++    expect(container.textContent).toContain("Files browser");
++    expect(routeFixture.navigate).not.toHaveBeenCalled();
++  });
++
++  it("drops a bare ?browse=1 instead of re-opening the Files tab", async () => {
++    routeFixture.location.search = "?browse=1";
++    window.history.replaceState(null, "", `${routeFixture.location.pathname}${routeFixture.location.search}`);
++    await render(panel({ fileTabsEnabled: true }));
++
++    expect(routeFixture.navigate).toHaveBeenCalledWith(
++      expect.objectContaining({ pathname: "/issues/PAP-1", search: "" }),
++      expect.objectContaining({ replace: true }),
++    );
++    expect(container.textContent).not.toContain("Files browser");
++  });
++
++  it("keeps a browse deep link that carries search state", async () => {
++    routeFixture.location.search = "?browse=1&q=App";
++    window.history.replaceState(null, "", `${routeFixture.location.pathname}${routeFixture.location.search}`);
++    await render(panel({ fileTabsEnabled: true }));
++
++    expect(container.textContent).toContain("Files browser");
++    expect(routeFixture.navigate).not.toHaveBeenCalled();
++  });
++
++  it("closes the file viewer when a plugin tab takes over", async () => {
++    pluginTabsFixture.slots = [{
++      id: "codeserver-detail-tab",
++      type: "detailTab",
++      displayName: "Code",
++      exportName: "CodeServerContextTab",
++      pluginId: "plugin-instance-1",
++      pluginKey: "qnnp.codeserver",
++      pluginDisplayName: "Code Server",
++      pluginVersion: "0.6.2",
++    }];
++    routeFixture.location.search = "?file=ui%2Fsrc%2FApp.tsx&workspace=project";
++    window.history.replaceState(null, "", `${routeFixture.location.pathname}${routeFixture.location.search}`);
++    await render(panel({ fileTabsEnabled: true }));
++
++    await act(async () => container.querySelector<HTMLElement>('[data-side-panel-tab-target="plugin:codeserver-detail-tab"]')?.click());
++    expect(routeFixture.navigate).toHaveBeenCalledWith(
++      expect.objectContaining({ pathname: "/issues/PAP-1", search: "" }),
++      expect.anything(),
++    );
++    expect(container.textContent).toContain("Plugin mount Code");
++  });
+ });
+diff --git a/ui/src/components/task-side-panel/TaskSidePanel.tsx b/ui/src/components/task-side-panel/TaskSidePanel.tsx
+index 5f7f738..e3af2af 100644
+--- a/ui/src/components/task-side-panel/TaskSidePanel.tsx
++++ b/ui/src/components/task-side-panel/TaskSidePanel.tsx
+@@ -20,6 +20,7 @@ import {
+ import {
+   Globe,
+   Box,
++  Code2,
+   FileCode2,
+   FileText,
+   FolderOpen,
+@@ -91,6 +92,7 @@ import { cn } from "@/lib/utils";
+ import { TaskDocumentPanel } from "./TaskDocumentPanel";
+ import { TaskWorkspaceFilePanel } from "./TaskWorkspaceFilePanel";
+ import { TaskSkillPanel } from "./TaskSkillPanel";
++import { PluginSlotMount, usePluginSlots } from "@/plugins/slots";
+ 
+ export interface TaskSidePanelProps {
+   issue: Issue;
+@@ -214,13 +216,13 @@ function useTaskSidePanelFileRouting() {
+     navigateSearch(writeBrowseStateToSearch(location.search, next), true);
+   }, [location.search, navigateSearch]);
+ 
+-  const close = useCallback(() => {
++  const close = useCallback((options?: { replace?: boolean }) => {
+     const currentSearch = getCurrentFileViewerSearch(location.search);
+     const params = new URLSearchParams(writeFileViewerStateToSearch(currentSearch, null).replace(/^\?/, ""));
+     params.delete("browse");
+     params.delete("q");
+     params.delete("folder");
+-    navigateSearch(params.toString() ? `?${params.toString()}` : "");
++    navigateSearch(params.toString() ? `?${params.toString()}` : "", options?.replace ?? false);
+   }, [location.search, navigateSearch]);
+ 
+   return {
+@@ -292,6 +294,25 @@ export function TaskSidePanel({
+       && restoredRef.current.state.tabs.length === 0,
+   );
+   const [launcherOpen, setLauncherOpen] = useState(restoredRef.current?.launcherOpen ?? false);
++  // Plugin detail tabs also surface in the task side panel. In the default
++  // chat-shell UI the main tab strip is hidden, so this is the only place a
++  // plugin tab (e.g. code-server) is reachable. Selecting one is UI state only:
++  // it is never persisted, because plugin slots can come and go across installs.
++  const [activePluginTabId, setActivePluginTabId] = useState<string | null>(null);
++  const [dismissedPluginTabIds, setDismissedPluginTabIds] = useState<Set<string>>(() => new Set());
++  const { slots: pluginDetailTabs } = usePluginSlots({
++    slotTypes: ["detailTab"],
++    entityType: "issue",
++    companyId: issue.companyId,
++    enabled: Boolean(issue.id),
++  });
++  const visiblePluginTabs = useMemo(
++    () => pluginDetailTabs.filter((slot) => !dismissedPluginTabIds.has(slot.id)),
++    [pluginDetailTabs, dismissedPluginTabIds],
++  );
++  const activePluginTab = activePluginTabId
++    ? visiblePluginTabs.find((slot) => slot.id === activePluginTabId) ?? null
++    : null;
+   const [paneHeaderSlot, setPaneHeaderSlot] = useState<HTMLElement | null>(null);
+   const bodyRef = useRef<HTMLDivElement>(null);
+   const scrollPositionsRef = useRef(new Map<string, number>());
+@@ -435,6 +456,12 @@ export function TaskSidePanel({
+     if (!fileTabsEnabled) return;
+     if (viewer.state) {
+       controller.openTab(taskPanelWorkspaceFileTab(viewer.state));
++    } else if (viewer.browse && viewer.query === null && viewer.folderPath === null
++      && viewer.browseProjectId === null && viewer.browseWorkspaceId === null) {
++      // A bare `browse=1` carries no state: the side panel already owns which
++      // tab is open, so the parameter is stale. Replace it instead of pushing,
++      // otherwise the back button would bounce through the same cleanup.
++      viewer.close({ replace: true });
+     } else if (viewer.browse) {
+       controller.openTab(taskPanelFilesTab());
+       controller.updateTab("files", {
+@@ -454,6 +481,7 @@ export function TaskSidePanel({
+     viewer.browse,
+     viewer.browseProjectId,
+     viewer.browseWorkspaceId,
++    viewer.close,
+     viewer.folderPath,
+     viewer.query,
+     viewer.state,
+@@ -500,6 +528,21 @@ export function TaskSidePanel({
+     }
+   }
+ 
++  function selectVisualTab(tabId: string) {
++    if (tabId.startsWith("plugin:")) {
++      captureScroll();
++      markInteracted();
++      // A plugin tab is not a file surface; leaving the Files tab must clear
++      // the file-viewer URL state, exactly like selectTab() does.
++      if (viewer.state || viewer.browse) viewer.close();
++      setActivePluginTabId(tabId.slice("plugin:".length));
++      setLauncherOpen(false);
++      return;
++    }
++    setActivePluginTabId(null);
++    selectTab(tabId);
++  }
++
+   function selectTab(tabId: string) {
+     captureScroll();
+     markInteracted();
+@@ -509,7 +552,10 @@ export function TaskSidePanel({
+     if (tab.payload.kind === "workspace-file") {
+       viewer.open(tab.payload);
+     } else if (tab.payload.kind === "files-browser") {
+-      viewer.openBrowse({ q: tab.payload.query ?? undefined });
++      // The side panel's own tab state is authoritative; only refresh the URL
++      // when it is already a browse link. Writing `browse=1` from tab clicks
++      // left the parameter in the address bar on every later page load.
++      if (viewer.browse) viewer.updateBrowseState({ q: tab.payload.query ?? null });
+     } else if (viewer.state || viewer.browse) {
+       viewer.close();
+     }
+@@ -529,6 +575,12 @@ export function TaskSidePanel({
+ 
+   function closeTab(tabId: string) {
+     markInteracted();
++    if (tabId.startsWith("plugin:")) {
++      const slotId = tabId.slice("plugin:".length);
++      setDismissedPluginTabIds((current) => new Set(current).add(slotId));
++      if (activePluginTabId === slotId) setActivePluginTabId(null);
++      return;
++    }
+     if (tabId === "subtasks") subtasksDismissedRef.current = true;
+     const tab = controller.tabs.find((candidate) => candidate.id === tabId);
+     controller.closeTab(tabId);
+@@ -563,7 +615,8 @@ export function TaskSidePanel({
+   }
+ 
+   const documentByKey = useMemo(() => new Map(documents.map((document) => [document.key, document])), [documents]);
+-  const visualTabs = useMemo<SidePanelTabItem[]>(() => controller.tabs.map((tab) => {
++  const visualTabs = useMemo<SidePanelTabItem[]>(() => {
++    const hostTabs = controller.tabs.map((tab) => {
+     const document = tab.payload.kind === "issue-document" ? documentByKey.get(tab.payload.documentKey) : null;
+     const browserIndex = browsersQuery.data?.findIndex((browser) => tab.payload.kind === "browser" && (browser.id === tab.payload.browserId || browser.sessionId === tab.payload.browserId)) ?? -1;
+     const browserLabel = browserIndex >= 0 && (browsersQuery.data?.length ?? 0) > 1 ? `Browser ${browserIndex + 1}` : null;
+@@ -576,7 +629,18 @@ export function TaskSidePanel({
+       contentMode: tab.contentMode,
+       icon: tabIcon(tab),
+     };
+-  }), [controller.tabs, documentByKey, taskCount, taskLabel, tasksTab, browsersQuery.data]);
++    });
++    const pluginTabs = visiblePluginTabs.map((slot) => ({
++      id: `plugin:${slot.id}`,
++      type: "plugin",
++      label: slot.displayName,
++      ariaLabel: slot.displayName,
++      closable: true,
++      contentMode: "full-bleed" as const,
++      icon: <Code2 />,
++    }));
++    return [...hostTabs, ...pluginTabs];
++  }, [controller.tabs, documentByKey, taskCount, taskLabel, tasksTab, browsersQuery.data, visiblePluginTabs]);
+ 
+   const launcherSections = useMemo<SidePanelLauncherSection[]>(() => {
+     const primary: SidePanelLauncherItem[] = conversationAgentId ? [
+@@ -594,6 +658,18 @@ export function TaskSidePanel({
+     if (fileTabsEnabled) {
+       primary.push({ id: "files", label: "Files", icon: <FolderOpen />, shortcut: "G F", alreadyOpen: controller.tabs.some((tab) => tab.id === "files") });
+     }
++    // Plugin tabs are closable; keep them in the launcher so a closed tab can
++    // be reopened without reloading the page (there is no main tab strip in
++    // the chat-shell task page).
++    for (const slot of pluginDetailTabs) {
++      primary.push({
++        id: `plugin:${slot.id}`,
++        label: slot.displayName,
++        description: "在任务工作区里打开编辑器",
++        icon: <Code2 />,
++        alreadyOpen: visiblePluginTabs.some((candidate) => candidate.id === slot.id),
++      });
++    }
+     const documentItems: SidePanelLauncherItem[] = [
+       ...(planDocument ? [{
+         id: "document:plan",
+@@ -638,10 +714,24 @@ export function TaskSidePanel({
+       });
+     }
+     return sections;
+-  }, [browsersQuery.data, conversationAgentId, taskCount, taskLabel, tasksTab?.hasError, controller.tabs, documents, fileTabsEnabled, planDocument, recentFilesQuery.data, recentFilesQuery.isError, recentFilesQuery.isLoading, subtasksAvailable]);
++  }, [browsersQuery.data, conversationAgentId, taskCount, taskLabel, tasksTab?.hasError, controller.tabs, documents, fileTabsEnabled, planDocument, pluginDetailTabs, visiblePluginTabs, recentFilesQuery.data, recentFilesQuery.isError, recentFilesQuery.isLoading, subtasksAvailable]);
+ 
+   function selectLauncherItem(item: SidePanelLauncherItem) {
+     markInteracted();
++    if (item.id.startsWith("plugin:")) {
++      const slotId = item.id.slice("plugin:".length);
++      // Same as selectVisualTab(): switching to a plugin tab closes the file viewer.
++      if (viewer.state || viewer.browse) viewer.close();
++      setDismissedPluginTabIds((current) => {
++        if (!current.has(slotId)) return current;
++        const next = new Set(current);
++        next.delete(slotId);
++        return next;
++      });
++      setActivePluginTabId(slotId);
++      setLauncherOpen(false);
++      return;
++    }
+     if (item.id.startsWith("browser:")) controller.openTab(taskPanelBrowserTab(item.id.slice(8)));
+     else if (item.id === "properties") controller.openTab(taskPanelPropertiesTab());
+     else if (item.id === "subtasks") {
+@@ -655,7 +745,9 @@ export function TaskSidePanel({
+     else if (item.id === "agent-tasks") controller.openTab(taskPanelAgentTasksTab());
+     else if (item.id === "files") {
+       controller.openTab(taskPanelFilesTab());
+-      viewer.openBrowse();
++      // Same rule as selectTab(): the panel opens the tab, the URL only follows
++      // an existing browse link. Never mint `browse=1` from tab actions.
++      if (viewer.browse) viewer.openBrowse();
+     } else if (item.id.startsWith("document:")) {
+       const key = item.id.slice("document:".length);
+       controller.openTab(taskPanelDocumentTab(key, item.label));
+@@ -704,20 +796,20 @@ export function TaskSidePanel({
+   const tabStrip = mobile ? (
+     <SidePanelMobileTabs
+       tabs={visualTabs}
+-      activeTabId={controller.activeTabId}
+-      onActiveTabChange={selectTab}
++      activeTabId={activePluginTab ? `plugin:${activePluginTab.id}` : controller.activeTabId}
++      onActiveTabChange={selectVisualTab}
+       onCloseTab={closeTab}
+       addControl={launcherControl}
+     />
+   ) : (
+     <SidePanelTabs
+       tabs={visualTabs}
+-      activeTabId={controller.activeTabId}
+-      onActiveTabChange={selectTab}
++      activeTabId={activePluginTab ? `plugin:${activePluginTab.id}` : controller.activeTabId}
++      onActiveTabChange={selectVisualTab}
+       onCloseTab={closeTab}
+       onReorderTabs={(ordered) => {
+         markInteracted();
+-        controller.reorderTabs(ordered);
++        controller.reorderTabs(ordered.filter((id) => !id.startsWith("plugin:")));
+       }}
+       addControl={launcherControl}
+       appearance={streamlinedTabs ? "streamlined-task" : "default"}
+@@ -725,7 +817,21 @@ export function TaskSidePanel({
+   );
+ 
+   let content: ReactNode;
+-  if (!activeTab) {
++  if (activePluginTab) {
++    content = (
++      <PluginSlotMount
++        slot={activePluginTab}
++        context={{
++          companyId: issue.companyId,
++          projectId: issue.projectId ?? null,
++          entityId: issue.id,
++          entityType: "issue",
++        }}
++        className="h-full min-h-0"
++        missingBehavior="placeholder"
++      />
++    );
++  } else if (!activeTab) {
+     content = <SidePanelLauncher sections={launcherSections} onSelect={selectLauncherItem} />;
+   } else if (activeTab.payload.kind === "browser") {
+     content = null; // Mounted below independently of the selected tab.
+@@ -798,7 +904,10 @@ export function TaskSidePanel({
+               workspaceId: next.workspaceId,
+             },
+           });
+-          viewer.updateBrowseState(next);
++          // Mirroring panel state into the URL is only meaningful when the URL
++          // is already a browse link (deep link / sheet). Creating `browse=1`
++          // here made it reappear on every reload of the task page.
++          if (viewer.browse) viewer.updateBrowseState(next);
+         }}
+         initialQuery={activeTab.payload.query}
+         initialFolderPath={activeTab.payload.folderPath}
+@@ -821,7 +930,8 @@ export function TaskSidePanel({
+     );
+   }
+ 
+-  const contentMode = activeTab?.contentMode ?? "full-bleed";
++  const contentMode = activePluginTab ? "full-bleed" : activeTab?.contentMode ?? "full-bleed";
++  const effectiveActiveTabId = activePluginTab ? `plugin:${activePluginTab.id}` : controller.activeTabId;
+   const header = <>{tabStrip}{hasArtifactUploadSlot ? (
+     // Keep the header footprint stable when selection changes. Hidden controls
+     // retain their space but cannot receive focus or open the file picker.
+@@ -854,9 +964,9 @@ export function TaskSidePanel({
+         ref={bodyRef}
+         data-side-panel-content-viewport="true"
+         onScroll={handleScroll}
+-        role={activeTab ? "tabpanel" : undefined}
+-        id={activeTab ? `side-panel-content-${activeTab.id}` : undefined}
+-        aria-labelledby={activeTab ? `side-panel-tab-${activeTab.id}` : undefined}
++        role={activePluginTab || activeTab ? "tabpanel" : undefined}
++        id={effectiveActiveTabId ? `side-panel-content-${effectiveActiveTabId}` : undefined}
++        aria-labelledby={effectiveActiveTabId ? `side-panel-tab-${effectiveActiveTabId}` : undefined}
+         className={cn(
+           "min-h-0 flex-1",
+           contentMode === "full-bleed" ? "overflow-hidden" : "overflow-auto",
+@@ -865,7 +975,7 @@ export function TaskSidePanel({
+         )}
+       >
+         {controller.tabs.map(tab => tab.payload.kind === "browser" ? (
+-          <div key={tab.id} hidden={tab.id !== controller.activeTabId} className={cn("h-full min-h-0", tab.id !== controller.activeTabId && "hidden")}>
++          <div key={tab.id} hidden={tab.id !== controller.activeTabId || Boolean(activePluginTab)} className={cn("h-full min-h-0", (tab.id !== controller.activeTabId || Boolean(activePluginTab)) && "hidden")}>
+             <TaskBrowserPanel active={tab.id === controller.activeTabId} issueId={issue.id} browser={browsersQuery.data?.find(b => tab.payload.kind === "browser" && (b.id === tab.payload.browserId || b.sessionId === tab.payload.browserId))} accessError={browsersQuery.isError} onOpenActiveBrowser={newestLiveBrowser ? () => controller.openTab(taskPanelBrowserTab(newestLiveBrowser.id)) : undefined} />
+           </div>
+         ) : null)}
+diff --git a/ui/src/pages/PluginPage.test.tsx b/ui/src/pages/PluginPage.test.tsx
+index 89775e2..ca28068 100644
+--- a/ui/src/pages/PluginPage.test.tsx
++++ b/ui/src/pages/PluginPage.test.tsx
+@@ -123,7 +123,7 @@ describe("PluginPage", () => {
+     vi.clearAllMocks();
+   });
+ 
+-  it("renders the breadcrumb and Back button on a legacy plugin route (no routeSidebar)", async () => {
++  it("renders the breadcrumb without page chrome on a legacy plugin route (no routeSidebar)", async () => {
+     mockParams.pluginRoutePath = "wiki";
+     mockPluginsApi.listUiContributions.mockResolvedValue([pageContribution()]);
+ 
+@@ -133,8 +133,8 @@ describe("PluginPage", () => {
+       { label: "Plugins", href: "/company/settings/instance/plugins" },
+       { label: "LLM Wiki" },
+     ]);
+-    expect(container.textContent).toContain("Back");
+-    expect(container.querySelector('a[href="/PAP/dashboard"]')).not.toBeNull();
++    expect(container.textContent).not.toContain("Back");
++    expect(container.querySelector('a[href="/PAP/dashboard"]')).toBeNull();
+ 
+     await act(async () => {
+       root.unmount();
+diff --git a/ui/src/pages/PluginPage.tsx b/ui/src/pages/PluginPage.tsx
+index 1a8b9a2..8b9804a 100644
+--- a/ui/src/pages/PluginPage.tsx
++++ b/ui/src/pages/PluginPage.tsx
+@@ -1,5 +1,5 @@
+ import { useEffect, useMemo } from "react";
+-import { Link, Navigate, useParams } from "@/lib/router";
++import { Navigate, useParams } from "@/lib/router";
+ import { useQuery } from "@tanstack/react-query";
+ import { useCompany } from "@/context/CompanyContext";
+ import { useBreadcrumbs } from "@/context/BreadcrumbContext";
+@@ -10,8 +10,6 @@ import {
+   resolveRouteSidebarSlot,
+   type ResolvedPluginSlot,
+ } from "@/plugins/slots";
+-import { Button } from "@/components/ui/button";
+-import { ArrowLeft } from "lucide-react";
+ import { NotFoundPage } from "./NotFound";
+ 
+ /**
+@@ -165,16 +163,7 @@ export function PluginPage() {
+ 
+   return (
+     <div className="space-y-4">
+-      {!routeSidebarActive && (
+-        <div className="flex items-center gap-2">
+-          <Button variant="ghost" size="sm" asChild>
+-            <Link to={companyPrefix ? `/${companyPrefix}/dashboard` : "/dashboard"}>
+-              <ArrowLeft className="h-4 w-4 mr-1" />
+-              Back
+-            </Link>
+-          </Button>
+-        </div>
+-      )}
++      {/* Plugin pages render their own surface; no "Back" chrome above it. */}
+       <PluginSlotMount
+         slot={pageSlot}
+         context={context}

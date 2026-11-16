@@ -22,6 +22,7 @@ src/shared/overlayHistory.ts 浮层的浏览器历史（Back 关闭而不是离�
 src/ui/index.tsx       三个槽组件 + 加载层
 proxy/                 可选的 cs-gate 自动登录代理（单文件，仅 Node 内置模块）
 test/                  node:test；含 SDK 内存宿主的真能力门禁测试
+docs/                  CMP-29 实现与实测记录、宿主侧栏 tab 补丁存档
 ```
 
 `dist/` 不入库，由 `npm run build` 生成（`manifest.js` / `worker.js` / `ui/index.js`）。
@@ -143,6 +144,8 @@ CI（GitHub Actions）在每次 push / PR 上跑 `npm ci && npm run build && npm
 ## 从 qnnp-opc 单仓迁出
 
 本仓库由 `qnnp-opc` 的 `plugins/codeserver/` 用 `git subtree split` 提取，保留了原有提交历史。原仓库只留一条指向本仓库的说明；安装路径的兼容软链由部署侧维护，不入库。
+
+实现、实测、踩坑与部署流程见 [`docs/CMP-29-paperclip-plugin-codeserver.md`](docs/CMP-29-paperclip-plugin-codeserver.md)；宿主侧栏 tab 的源码补丁存档在同目录 [`docs/patches/`](docs/patches/)。这两份文件于 2026-11-16 按 CMP-33 工作区规则从 qnnp-opc 迁入。
 
 ## License
 
