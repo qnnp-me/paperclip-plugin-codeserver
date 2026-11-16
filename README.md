@@ -2,7 +2,7 @@
 
 在 [Paperclip](https://github.com/paperclipai/paperclip) 里直接打开 [code-server](https://github.com/coder/code-server)（VS Code Web）。插件的所有部署差异（地址、端口、目录、自动登录秘密文件）都是**配置项**，改配置不需要重新构建。
 
-- 顶栏「Code」：按当前页面的任务/项目解析它自己的工作区目录，整屏打开；非任务/项目页不渲染。
+- 顶栏「Code」：按当前页面的任务/项目解析它自己的工作区目录，整屏打开；非任务/项目页不渲染。浮层右上角有关闭按钮，Esc 关闭，浏览器「后退」也是关闭浮层而不是离开页面（打开时压入一条历史记录，关闭时复用它）。
 - 任务属性侧栏「Code」tab：只有编辑器，占满 tab；关掉后可从「+ 新建 tab」重新打开。
 - 插件页 `/:companyPrefix/plugins/<实例UUID>`：全屏编辑器，默认目录来自配置。
 - 可选自动登录：插件 worker 签一张短时票据，容器内 [cs-gate 代理](proxy/) 在服务端换成会话 cookie，浏览器不见登录页。**不配代理也能用**，只是每个浏览器登录一次。
@@ -18,6 +18,7 @@ src/resolve.ts         任务/项目 → 工作区目录（走宿主 read 能力
 src/gate.ts            cs-gate 票据签名（HMAC-SHA256）
 src/shared/urls.ts     地址推导、?folder= 深链、票据拼接（纯函数）
 src/shared/workspace.ts 目录选择逻辑（纯函数）
+src/shared/overlayHistory.ts 浮层的浏览器历史（Back 关闭而不是离开页面）
 src/ui/index.tsx       三个槽组件 + 加载层
 proxy/                 可选的 cs-gate 自动登录代理（单文件，仅 Node 内置模块）
 test/                  node:test；含 SDK 内存宿主的真能力门禁测试

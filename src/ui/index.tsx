@@ -15,11 +15,12 @@
  * `@paperclipai/plugin-sdk/ui` may stay as bare imports (the host rewrites them).
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useHostContext, usePluginData } from "@paperclipai/plugin-sdk/ui";
 import { normalizeSettings, type CodeServerSettings } from "../config.js";
 import { buildCodeServerUrl, deriveCodeServerBase, withGateTicket } from "../shared/urls.js";
+import { createOverlayHistory, type OverlayHistory } from "../shared/overlayHistory.js";
 
 type SlotContext = {
   companyId?: string | null;
@@ -138,6 +139,33 @@ const OVERLAY_STYLE = {
   flexDirection: "column",
   background: "Canvas",
   color: "CanvasText",
+} as const;
+
+/**
+ * The overlay is an iframe the host cannot draw over, so the way out has to be
+ * visible: one small floating button, top-right, plus Esc and the browser Back
+ * button (see `createOverlayHistory`).
+ */
+const CLOSE_BUTTON_STYLE = {
+  position: "absolute",
+  top: "6px",
+  right: "6px",
+  zIndex: 2,
+  width: "26px",
+  height: "26px",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 0,
+  font: "inherit",
+  fontSize: "15px",
+  lineHeight: 1,
+  borderRadius: "6px",
+  border: "1px solid color-mix(in srgb, CanvasText 22%, transparent)",
+  background: "color-mix(in srgb, Canvas 90%, transparent)",
+  color: "CanvasText",
+  cursor: "pointer",
+  boxShadow: "0 1px 4px color-mix(in srgb, CanvasText 18%, transparent)",
 } as const;
 
 const TERMINAL_ICON = (
@@ -363,6 +391,7 @@ function CodeEntryButton({
   const baseUrl = useCodeServerBase(settings);
   const ticket = useGateTicket();
   const [open, setOpen] = useState(false);
+  const historyRef = useRef<OverlayHistory | null>(null);
 
   const folder = data?.path ?? "";
   const frameUrl = useMemo(
@@ -370,10 +399,30 @@ function CodeEntryButton({
     [baseUrl, folder, ticket],
   );
 
+  // Mount once: the overlay's history entry outlives individual opens.
+  useEffect(() => {
+    const controller = createOverlayHistory({ win: window, onChange: setOpen });
+    historyRef.current = controller;
+    return () => {
+      historyRef.current = null;
+      controller.dispose();
+    };
+  }, []);
+
+  const openEditor = () => {
+    if (historyRef.current) historyRef.current.open();
+    else setOpen(true);
+  };
+
+  const closeEditor = () => {
+    if (historyRef.current) historyRef.current.close();
+    else setOpen(false);
+  };
+
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") closeEditor();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -391,7 +440,7 @@ function CodeEntryButton({
         type="button"
         style={ENTRY_BUTTON_STYLE}
         title={title}
-        onClick={() => setOpen(true)}
+        onClick={openEditor}
       >
         {TERMINAL_ICON}
         <span>Code</span>
@@ -399,6 +448,15 @@ function CodeEntryButton({
       {open ? (
         <PortalLayer>
           <div style={OVERLAY_STYLE} role="dialog" aria-label="code-server">
+            <button
+              type="button"
+              style={CLOSE_BUTTON_STYLE}
+              title="关闭编辑器（Esc）"
+              aria-label="关闭编辑器"
+              onClick={closeEditor}
+            >
+              ×
+            </button>
             {settingsLoading ? (
               <div style={STATUS_STYLE}>正在读取插件配置…</div>
             ) : frameUrl ? (
