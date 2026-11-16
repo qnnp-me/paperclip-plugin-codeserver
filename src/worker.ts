@@ -1,22 +1,11 @@
 /**
- * Minimal worker. The plugin is UI-only; the worker exists because Paperclip
- * requires `entrypoints.worker`, and it keeps the plugin's health diagnostics
- * meaningful without doing any autonomous work.
+ * code-server plugin worker entrypoint.
+ *
+ * The definition lives in `plugin.ts` (side-effect free, testable). This file
+ * only boots the worker RPC loop.
  */
-import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
-
-const plugin = definePlugin({
-  async setup(ctx) {
-    ctx.logger.info("qnnp.codeserver worker ready");
-  },
-  async onHealth() {
-    return { status: "ok" };
-  },
-  // No timers, sockets, or detached work: never hold the instance awake.
-  async onIdleDrain() {
-    return "none" as const;
-  },
-});
+import { runWorker } from "@paperclipai/plugin-sdk";
+import plugin from "./plugin.ts";
 
 export default plugin;
 

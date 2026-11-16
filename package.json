@@ -1,14 +1,14 @@
 {
   "name": "@qnnp/paperclip-plugin-codeserver",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Embed code-server inside Paperclip: a page slot with an iframe and a global toolbar entry button.",
+  "description": "Embed code-server inside Paperclip: a page slot, a top-bar entry, and a Code tab on tasks/projects that opens each entity's own workspace folder.",
   "license": "MIT",
   "scripts": {
     "build": "node ./esbuild.config.mjs",
     "dev": "node ./esbuild.config.mjs --watch",
-    "test": "node --test test/urls.test.mjs test/ui.render.test.mjs"
+    "test": "node --test test/urls.test.mjs test/workspace.test.mjs test/workspace.harness.test.mjs test/ui.render.test.mjs"
   },
   "paperclipPlugin": {
     "manifest": "./dist/manifest.js",
