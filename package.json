@@ -1,0 +1,24 @@
+{
+  "name": "@qnnp/paperclip-plugin-codeserver",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Embed code-server inside Paperclip: a page slot with an iframe and a global toolbar entry button.",
+  "license": "MIT",
+  "scripts": {
+    "build": "node ./esbuild.config.mjs",
+    "dev": "node ./esbuild.config.mjs --watch",
+    "test": "node --test test/urls.test.mjs test/ui.render.test.mjs"
+  },
+  "paperclipPlugin": {
+    "manifest": "./dist/manifest.js",
+    "worker": "./dist/worker.js",
+    "ui": "./dist/ui/"
+  },
+  "devDependencies": {
+    "@paperclipai/plugin-sdk": "2026.1106.0",
+    "esbuild": "^0.28.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  }
+}
