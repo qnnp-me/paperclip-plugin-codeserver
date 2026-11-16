@@ -57,6 +57,59 @@ const FRAME_STYLE = {
   background: "Canvas",
 } as const;
 
+const FRAME_WRAPPER_STYLE = {
+  position: "relative",
+  width: "100%",
+  height: "100%",
+  background: "Canvas",
+} as const;
+
+const LOADER_STYLE = {
+  position: "absolute",
+  inset: 0,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "10px",
+  background: "Canvas",
+  color: "inherit",
+  fontSize: "12px",
+  lineHeight: 1.6,
+  textAlign: "center",
+  padding: "16px",
+} as const;
+
+const SPINNER_STYLE = {
+  width: "18px",
+  height: "18px",
+  borderRadius: "50%",
+  border: "2px solid currentColor",
+  borderTopColor: "transparent",
+  opacity: 0.5,
+  animation: "cs-frame-spin 0.9s linear infinite",
+} as const;
+
+const LOADER_HINT_STYLE = {
+  opacity: 0.6,
+  maxWidth: "320px",
+} as const;
+
+const LOADER_CSS = "@keyframes cs-frame-spin { to { transform: rotate(360deg) } }";
+const LOADER_STYLE_ID = "cs-frame-loader-style";
+
+/** Inject the spinner keyframes once per document (static rendering has none). */
+function useLoaderStyle(): void {
+  useEffect(() => {
+    if (typeof document === "undefined" || !document.head) return;
+    if (document.getElementById(LOADER_STYLE_ID)) return;
+    const style = document.createElement("style");
+    style.id = LOADER_STYLE_ID;
+    style.textContent = LOADER_CSS;
+    document.head.appendChild(style);
+  }, []);
+}
+
 const STATUS_STYLE = {
   padding: "12px",
   fontSize: "12px",
@@ -146,14 +199,53 @@ function routeEntity(pathname: string | undefined): {
   return null;
 }
 
+/**
+ * code-server's workbench is a large front-end bundle: the iframe stays blank
+ * for a few seconds after mounting. Keep the editor mounted (load starts at
+ * once) and cover it with a loader until its `load` event fires, so a click
+ * never looks like a dead page.
+ */
 function CodeFrame({ frameUrl, title }: { frameUrl: string; title: string }) {
+  useLoaderStyle();
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const [slow, setSlow] = useState(false);
+  const ready = loadedUrl === frameUrl;
+
+  useEffect(() => {
+    if (ready) return;
+    setSlow(false);
+    const timer = setTimeout(() => setSlow(true), 12000);
+    return () => clearTimeout(timer);
+  }, [frameUrl, ready]);
+
   return (
-    <iframe
-      src={frameUrl}
-      style={FRAME_STYLE}
-      title={title}
-      allow="clipboard-read; clipboard-write"
-    />
+    <div style={FRAME_WRAPPER_STYLE}>
+      <iframe
+        src={frameUrl}
+        style={FRAME_STYLE}
+        title={title}
+        allow="clipboard-read; clipboard-write"
+        onLoad={() => setLoadedUrl(frameUrl)}
+      />
+      {ready ? null : (
+        <div style={LOADER_STYLE} role="status" aria-live="polite">
+          <span style={SPINNER_STYLE} aria-hidden="true" />
+          <span>正在加载编辑器…</span>
+          <span style={LOADER_HINT_STYLE}>
+            首次打开需要下载 VS Code 前端，通常 5–15 秒。
+            {slow ? (
+              <>
+                <br />
+                还在加载：
+                <a href={frameUrl} target="_blank" rel="noreferrer">
+                  在新标签里打开
+                </a>
+              </>
+            ) : null}
+          </span>
+        </div>
+      )}
+    </div>
   );
 }
 

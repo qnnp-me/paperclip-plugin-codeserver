@@ -73,6 +73,17 @@ test("CodeServerPage renders a chrome-free full-bleed editor", () => {
   assert.doesNotMatch(html, /设置/);
 });
 
+test("CodeFrame shows a loader over the blank iframe until it loads", () => {
+  const html = renderToStaticMarkup(createElement(ui.CodeServerPage, { slot, context }));
+  // The editor is mounted immediately so the download starts, but covered.
+  assert.match(html, /<iframe/);
+  assert.match(html, /正在加载编辑器/);
+  assert.match(html, /首次打开需要下载 VS Code 前端/);
+  assert.match(html, /animation:cs-frame-spin/);
+  // No escape hatch before the 12s mark (it would be chrome on a fast open).
+  assert.doesNotMatch(html, /在新标签里打开/);
+});
+
 test("CodeServerToolbarButton is the single top-bar entry for the current entity", () => {
   const html = renderToStaticMarkup(createElement(ui.CodeServerToolbarButton, { slot, context }));
   assert.match(html, /<button/);

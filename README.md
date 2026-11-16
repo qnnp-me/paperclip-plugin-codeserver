@@ -82,3 +82,9 @@ paperclipai plugin uninstall qnnp.codeserver --api-base https://paperclip-19099.
 - 新增 worker 数据方法 `gate`：用共享秘密签 5 分钟票据（`v1.<exp>.<HMAC>`），UI 拼 `&cs_t=` 到 iframe URL
 - 拿不到秘密文件时返回 `null`，UI 退回纯 `?folder=` 直链（code-server 登录页），不报错
 - 代理与服务端配置见 `/home/linuxbrew/.local/opt/cs-gate/README.md`
+
+## 0.5.1 — 打开时的加载提示
+
+- iframe 保持立即挂载（照常开始下载），覆盖一层居中的 loader：转圈 + 「正在加载编辑器…」+ 「首次打开需要下载 VS Code 前端，通常 5–15 秒」
+- `load` 事件触发后移除 loader；>12 秒仍未加载完则追加「在新标签里打开」兜底链接
+- 顶栏浮层、侧栏 tab、插件页三处共用同一个 `CodeFrame`，行为一致
